@@ -1,6 +1,6 @@
 //! Type-safe Rust client for the Anthropic API.
 //!
-//! See the [crate README](https://github.com/joshrotenberg/anthropic-rs) for an overview.
+//! See the [crate README](https://github.com/joshrotenberg/claude-api) for an overview.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
