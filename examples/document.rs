@@ -50,12 +50,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{text}");
             if let Some(cites) = citations {
                 if !cites.is_empty() {
-                    println!("\n[citations: {} reference(s)]", cites.len());
+                    println!("[{} citation(s)]", cites.len());
                     for c in cites {
-                        println!("  - {c}");
+                        let kind = c.type_tag().unwrap_or("?");
+                        let title = c.title().unwrap_or("(untitled)");
+                        let text = c.cited_text().unwrap_or("");
+                        println!("  - [{kind}] {title}: \"{text}\"");
                     }
                 }
             }
+            println!();
         }
     }
     Ok(())

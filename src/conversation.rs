@@ -91,9 +91,52 @@ pub struct Conversation {
     #[serde(default)]
     pub auto_cache: AutoCacheMode,
 
+    /// Optional context-compaction policy. When set, oldest user/assistant
+    /// roundtrips are dropped before each `send` once the estimated input
+    /// exceeds [`ContextCompactionPolicy::max_input_tokens`]. See
+    /// [`Self::compact_if_needed`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compaction: Option<ContextCompactionPolicy>,
+
     /// Per-turn `Usage` records, oldest first. Updated by [`Self::send`].
     #[serde(default)]
     pub usage_history: Vec<UsageRecord>,
+}
+
+/// Policy controlling when and how [`Conversation`] drops older turns to
+/// stay under a token budget.
+///
+/// v0.3 first cut implements **truncation**: oldest complete user→assistant
+/// roundtrips are dropped until either the estimated input is under
+/// [`Self::max_input_tokens`] or only [`Self::keep_recent_turns`] complete
+/// roundtrips remain. Tool-use / tool-result pairs are preserved as a unit
+/// (an assistant turn with `tool_use` blocks is never dropped without its
+/// matching `tool_result` user turn and follow-up assistant text).
+///
+/// Token estimation is a fast local heuristic (~4 chars/token); for exact
+/// counts use [`Conversation::estimate_input_tokens`] only as a hint, and
+/// configure `max_input_tokens` with some headroom.
+///
+/// Future work (v0.4): callback-based summarization that replaces a span
+/// of old turns with a single text summary instead of dropping them.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ContextCompactionPolicy {
+    /// Compact when the estimated input would exceed this many tokens.
+    pub max_input_tokens: u32,
+    /// After compaction, keep at least this many complete roundtrips.
+    pub keep_recent_turns: usize,
+}
+
+impl Default for ContextCompactionPolicy {
+    fn default() -> Self {
+        Self {
+            // Generous default; ~50% of the 200k context window so users
+            // hit it before the model does.
+            max_input_tokens: 100_000,
+            keep_recent_turns: 4,
+        }
+    }
 }
 
 /// One turn's `Usage` paired with the model it ran on.
@@ -142,8 +185,17 @@ impl Conversation {
             mcp_servers: Vec::new(),
             container: None,
             auto_cache: AutoCacheMode::Off,
+            compaction: None,
             usage_history: Vec::new(),
         }
+    }
+
+    /// Attach a context-compaction policy. Without one, conversation
+    /// history grows unbounded.
+    #[must_use]
+    pub fn with_compaction(mut self, policy: ContextCompactionPolicy) -> Self {
+        self.compaction = Some(policy);
+        self
     }
 
     /// Set the system prompt.
@@ -248,6 +300,106 @@ impl Conversation {
             .sum()
     }
 
+    /// Heuristic estimate of how many input tokens this conversation
+    /// would consume on the next request.
+    ///
+    /// Uses a fast local approximation (~4 characters per token), summed
+    /// across the system prompt, all messages, and tool definitions.
+    /// Adequate for compaction decisions; for exact billing-quality
+    /// numbers call `count_tokens` via the API.
+    #[must_use]
+    pub fn estimate_input_tokens(&self) -> u32 {
+        let mut total = 0u32;
+        if let Some(s) = &self.system {
+            total = total.saturating_add(estimate_system_tokens(s));
+        }
+        for msg in &self.messages {
+            total = total.saturating_add(estimate_message_tokens(msg));
+        }
+        // Each tool's schema serialized to JSON.
+        for tool in &self.tools {
+            if let Ok(s) = serde_json::to_string(tool) {
+                total = total.saturating_add(estimate_text_tokens(&s));
+            }
+        }
+        total
+    }
+
+    /// Number of complete user→assistant roundtrips in the history.
+    /// A "complete" roundtrip ends with an Assistant turn that has no
+    /// outstanding `tool_use` blocks and is not the most recent message.
+    #[must_use]
+    pub fn complete_roundtrip_count(&self) -> usize {
+        let last_idx = self.messages.len().saturating_sub(1);
+        self.messages
+            .iter()
+            .enumerate()
+            .filter(|(i, m)| *i < last_idx && m.role == Role::Assistant && !message_has_tool_use(m))
+            .count()
+    }
+
+    /// If a [`ContextCompactionPolicy`] is set and the estimated input
+    /// exceeds the configured budget, drop oldest complete roundtrips
+    /// until either the estimate fits or `keep_recent_turns` remain.
+    ///
+    /// Tool-use / tool-result pairs are preserved as a unit. Returns
+    /// `true` if any messages were dropped.
+    pub fn compact_if_needed(&mut self) -> bool {
+        let Some(policy) = self.compaction.clone() else {
+            return false;
+        };
+
+        let initial = self.estimate_input_tokens();
+        if initial <= policy.max_input_tokens {
+            return false;
+        }
+
+        let initial_msg_count = self.messages.len();
+        loop {
+            if self.estimate_input_tokens() <= policy.max_input_tokens {
+                break;
+            }
+            if self.complete_roundtrip_count() <= policy.keep_recent_turns {
+                break;
+            }
+            if !self.drop_oldest_roundtrip() {
+                break;
+            }
+        }
+
+        let dropped = initial_msg_count - self.messages.len();
+        if dropped > 0 {
+            tracing::warn!(
+                initial_estimate = initial,
+                final_estimate = self.estimate_input_tokens(),
+                messages_dropped = dropped,
+                roundtrips_remaining = self.complete_roundtrip_count(),
+                "claude-api: context compaction applied",
+            );
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Internal: drop everything from index 0 through the first
+    /// "end-of-roundtrip" assistant message (inclusive). Returns false
+    /// if there is no complete roundtrip to drop without breaking
+    /// tool-use/tool-result pair integrity.
+    fn drop_oldest_roundtrip(&mut self) -> bool {
+        let last_idx = self.messages.len().saturating_sub(1);
+        let drop_to = self.messages.iter().enumerate().position(|(i, m)| {
+            i < last_idx && m.role == Role::Assistant && !message_has_tool_use(m)
+        });
+        match drop_to {
+            Some(idx) => {
+                self.messages.drain(0..=idx);
+                true
+            }
+            None => false,
+        }
+    }
+
     /// Build the [`CreateMessageRequest`] this conversation would send next,
     /// including any auto-cache breakpoints. Pure -- does not touch state.
     ///
@@ -330,6 +482,7 @@ impl Conversation {
     #[cfg(feature = "async")]
     #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
     pub async fn send_with_beta(&mut self, client: &Client, betas: &[&str]) -> Result<Message> {
+        self.compact_if_needed();
         let request = self.build_request();
         let response = client.messages().create_with_beta(request, betas).await?;
         self.usage_history.push(UsageRecord {
@@ -340,6 +493,76 @@ impl Conversation {
         self.messages
             .push(MessageInput::assistant(response.content.clone()));
         Ok(response)
+    }
+}
+
+// ---- Token estimation helpers -----------------------------------------------
+
+fn estimate_text_tokens(s: &str) -> u32 {
+    // Anthropic averages ~3.5-4 chars/token for English. Round up so we
+    // err on the conservative (over-estimating) side; better to compact
+    // a turn early than to overshoot the model's real budget.
+    let chars = u32::try_from(s.chars().count()).unwrap_or(u32::MAX);
+    chars.div_ceil(4)
+}
+
+fn estimate_system_tokens(s: &SystemPrompt) -> u32 {
+    match s {
+        SystemPrompt::Text(t) => estimate_text_tokens(t),
+        SystemPrompt::Blocks(blocks) => blocks.iter().map(estimate_block_tokens).sum(),
+    }
+}
+
+fn estimate_message_tokens(msg: &MessageInput) -> u32 {
+    // ~4 tokens of role overhead per message (heuristic; varies in practice).
+    let body = match &msg.content {
+        MessageContent::Text(s) => estimate_text_tokens(s),
+        MessageContent::Blocks(blocks) => blocks.iter().map(estimate_block_tokens).sum(),
+    };
+    body.saturating_add(4)
+}
+
+fn estimate_block_tokens(block: &ContentBlock) -> u32 {
+    use crate::messages::content::ToolResultContent;
+
+    match block {
+        ContentBlock::Known(KnownBlock::Text { text, .. }) => estimate_text_tokens(text),
+        ContentBlock::Known(KnownBlock::Thinking { thinking, .. }) => {
+            estimate_text_tokens(thinking)
+        }
+        ContentBlock::Known(KnownBlock::ToolUse { name, input, .. }) => {
+            // name + JSON-stringified input.
+            estimate_text_tokens(name).saturating_add(estimate_text_tokens(&input.to_string()))
+        }
+        ContentBlock::Known(KnownBlock::ServerToolUse { name, input, .. }) => {
+            estimate_text_tokens(name).saturating_add(estimate_text_tokens(&input.to_string()))
+        }
+        ContentBlock::Known(KnownBlock::ToolResult { content, .. }) => match content {
+            ToolResultContent::Text(s) => estimate_text_tokens(s),
+            ToolResultContent::Blocks(b) => b.iter().map(estimate_block_tokens).sum(),
+        },
+        // Images, documents, web_search results: significant per-asset cost
+        // not derivable from JSON length alone. Use a flat rough estimate so
+        // compaction kicks in even when the conversation is image-heavy.
+        ContentBlock::Known(KnownBlock::Image { .. }) => 1500,
+        ContentBlock::Known(KnownBlock::Document { .. }) => 2000,
+        ContentBlock::Known(KnownBlock::WebSearchToolResult { .. }) => 500,
+        ContentBlock::Known(KnownBlock::RedactedThinking { data, .. }) => {
+            estimate_text_tokens(data)
+        }
+        ContentBlock::Other(v) => estimate_text_tokens(&v.to_string()),
+    }
+}
+
+fn message_has_tool_use(msg: &MessageInput) -> bool {
+    match &msg.content {
+        MessageContent::Text(_) => false,
+        MessageContent::Blocks(blocks) => blocks.iter().any(|b| {
+            matches!(
+                b,
+                ContentBlock::Known(KnownBlock::ToolUse { .. } | KnownBlock::ServerToolUse { .. })
+            )
+        }),
     }
 }
 
@@ -599,6 +822,201 @@ mod tests {
     }
 
     // ---- pricing integration -----------------------------------------------
+
+    // ---- compaction --------------------------------------------------------
+
+    #[test]
+    fn estimate_input_tokens_grows_with_message_size() {
+        let mut c = convo();
+        c.push_user("hi");
+        let small = c.estimate_input_tokens();
+
+        let mut c2 = convo();
+        c2.push_user("a".repeat(1000));
+        let large = c2.estimate_input_tokens();
+
+        assert!(large > small * 10, "{large} should dwarf {small}");
+    }
+
+    #[test]
+    fn compact_if_needed_no_op_without_policy() {
+        let mut c = convo();
+        for i in 0..10 {
+            c.push_user(format!("user {i}"));
+            c.push_assistant(format!("assistant {i}"));
+        }
+        let before = c.messages.len();
+        assert!(!c.compact_if_needed());
+        assert_eq!(c.messages.len(), before);
+    }
+
+    #[test]
+    fn compact_if_needed_no_op_when_under_threshold() {
+        let mut c = convo().with_compaction(ContextCompactionPolicy {
+            max_input_tokens: 100_000, // huge threshold
+            keep_recent_turns: 1,
+        });
+        c.push_user("short");
+        c.push_assistant("short");
+        assert!(!c.compact_if_needed());
+        assert_eq!(c.messages.len(), 2);
+    }
+
+    #[test]
+    fn compact_if_needed_drops_oldest_roundtrips_above_threshold() {
+        // Tight budget so compaction must fire. Each turn is ~25 tokens of
+        // text + 4 tokens of role overhead.
+        let mut c = convo().with_compaction(ContextCompactionPolicy {
+            max_input_tokens: 60,
+            keep_recent_turns: 1,
+        });
+        for i in 0..6 {
+            c.push_user(format!(
+                "this is user message number {i} with reasonable length"
+            ));
+            c.push_assistant(format!(
+                "this is assistant response number {i} with similar length"
+            ));
+        }
+        // Add a trailing user (the "next question") so we have a partial roundtrip.
+        c.push_user("current question");
+
+        let before_count = c.messages.len();
+        assert!(c.compact_if_needed(), "should have compacted");
+        assert!(
+            c.messages.len() < before_count,
+            "expected drop; got {} -> {}",
+            before_count,
+            c.messages.len()
+        );
+        // Most recent messages preserved.
+        let MessageContent::Text(last_user) = &c.messages.last().unwrap().content else {
+            panic!("expected text");
+        };
+        assert_eq!(last_user, "current question");
+    }
+
+    #[test]
+    fn compact_if_needed_respects_keep_recent_turns() {
+        // Even if over threshold, we must keep at least N complete roundtrips.
+        let mut c = convo().with_compaction(ContextCompactionPolicy {
+            max_input_tokens: 1, // impossibly tight
+            keep_recent_turns: 2,
+        });
+        for i in 0..5 {
+            c.push_user(format!("u{i}"));
+            c.push_assistant(format!("a{i}"));
+        }
+        c.push_user("trailing");
+
+        c.compact_if_needed();
+        // Should have exactly 2 complete roundtrips remaining + the trailing user.
+        assert_eq!(c.complete_roundtrip_count(), 2);
+        let MessageContent::Text(last) = &c.messages.last().unwrap().content else {
+            panic!("expected text");
+        };
+        assert_eq!(last, "trailing");
+    }
+
+    #[test]
+    fn compact_if_needed_preserves_tool_use_tool_result_pairs() {
+        use crate::messages::content::{ContentBlock, KnownBlock, ToolResultContent};
+        use serde_json::json;
+
+        let mut c = convo().with_compaction(ContextCompactionPolicy {
+            max_input_tokens: 30,
+            keep_recent_turns: 0, // free to drop everything droppable
+        });
+
+        // Roundtrip 1: simple
+        c.push_user("first user".repeat(20)); // padded to push estimate up
+        c.push_assistant("first answer".repeat(20));
+
+        // Roundtrip 2: tool sequence
+        c.push_user("second user".repeat(20));
+        c.messages.push(MessageInput::assistant(vec![
+            ContentBlock::text("calling tool"),
+            ContentBlock::Known(KnownBlock::ToolUse {
+                id: "toolu_1".into(),
+                name: "fn".into(),
+                input: json!({}),
+            }),
+        ]));
+        c.messages.push(MessageInput::user(vec![ContentBlock::Known(
+            KnownBlock::ToolResult {
+                tool_use_id: "toolu_1".into(),
+                content: ToolResultContent::Text("result".into()),
+                is_error: None,
+                cache_control: None,
+            },
+        )]));
+        c.push_assistant("here is the answer".repeat(20));
+
+        // Trailing user.
+        c.push_user("final");
+
+        c.compact_if_needed();
+
+        // After compaction, no tool_use should be left without its tool_result.
+        for (i, m) in c.messages.iter().enumerate() {
+            if message_has_tool_use(m) {
+                assert!(
+                    i + 1 < c.messages.len(),
+                    "tool_use at index {i} must be followed by a tool_result"
+                );
+                let next = &c.messages[i + 1];
+                let MessageContent::Blocks(blocks) = &next.content else {
+                    panic!("expected blocks");
+                };
+                assert!(
+                    blocks
+                        .iter()
+                        .any(|b| matches!(b, ContentBlock::Known(KnownBlock::ToolResult { .. }))),
+                    "next message after tool_use must contain tool_result"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn drop_oldest_roundtrip_returns_false_when_only_partial_remains() {
+        let mut c = convo();
+        c.push_user("only user, no assistant yet");
+        // No complete roundtrip; can't drop.
+        assert!(!c.drop_oldest_roundtrip());
+        assert_eq!(c.messages.len(), 1);
+    }
+
+    #[test]
+    fn complete_roundtrip_count_excludes_trailing_partial() {
+        let mut c = convo();
+        c.push_user("u1");
+        c.push_assistant("a1");
+        c.push_user("u2");
+        c.push_assistant("a2");
+        c.push_user("u3"); // trailing partial
+        assert_eq!(c.complete_roundtrip_count(), 2);
+    }
+
+    #[test]
+    fn complete_roundtrip_count_skips_assistant_with_tool_use() {
+        use crate::messages::content::{ContentBlock, KnownBlock};
+        use serde_json::json;
+
+        let mut c = convo();
+        c.push_user("u1");
+        c.messages
+            .push(MessageInput::assistant(vec![ContentBlock::Known(
+                KnownBlock::ToolUse {
+                    id: "t".into(),
+                    name: "fn".into(),
+                    input: json!({}),
+                },
+            )]));
+        // The assistant turn has tool_use; not the end of a roundtrip.
+        // Without a follow-up, complete count is 0.
+        assert_eq!(c.complete_roundtrip_count(), 0);
+    }
 
     #[cfg(feature = "pricing")]
     #[test]

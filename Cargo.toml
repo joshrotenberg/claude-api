@@ -1,6 +1,6 @@
 [package]
 name = "claude-api"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Type-safe Rust client for the Anthropic API"
@@ -14,18 +14,22 @@ documentation = "https://docs.rs/claude-api"
 [features]
 default = ["async", "rustls", "streaming"]
 
-async = ["dep:tokio", "dep:reqwest", "dep:async-trait"]
+async = [
+    "dep:tokio",
+    "dep:reqwest",
+    "dep:async-trait",
+    "dep:futures-util",
+    "dep:bytes",
+    "dep:tokio-util",
+    "reqwest?/stream",
+    "reqwest?/multipart",
+]
 sync = ["dep:reqwest", "reqwest?/blocking"]
 
 rustls = ["reqwest?/rustls-tls"]
 native-tls = ["reqwest?/native-tls"]
 
-streaming = [
-    "dep:eventsource-stream",
-    "dep:futures-util",
-    "dep:bytes",
-    "reqwest?/stream",
-]
+streaming = ["dep:eventsource-stream"]
 
 schemars-tools = ["dep:schemars"]
 
@@ -45,6 +49,7 @@ tracing = "0.1"
 http = "1.1"
 
 tokio = { version = "1", features = ["time", "sync"], optional = true }
+tokio-util = { version = "0.7", features = ["io"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
 async-trait = { version = "0.1", optional = true }
 

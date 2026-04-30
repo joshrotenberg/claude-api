@@ -61,6 +61,16 @@ impl Client {
         crate::models::Models::new(self)
     }
 
+    /// Namespace handle for the Batches API.
+    pub fn batches(&self) -> crate::batches::Batches<'_> {
+        crate::batches::Batches::new(self)
+    }
+
+    /// Namespace handle for the Files API (beta).
+    pub fn files(&self) -> crate::files::Files<'_> {
+        crate::files::Files::new(self)
+    }
+
     /// Build a [`reqwest::RequestBuilder`] preloaded with the per-request
     /// authentication, version, and user-agent headers. Endpoints add their
     /// body and any per-request beta headers, then call [`Self::execute`].
@@ -170,14 +180,13 @@ impl Client {
     /// Send a request expected to return a streaming body.
     ///
     /// Returns the raw [`reqwest::Response`] on success so the caller can
-    /// wrap its body in an SSE parser. Non-2xx responses are mapped to
-    /// [`Error::Api`] (with `request-id` and `Retry-After`) just like
-    /// [`Self::execute`]; the body is consumed in that case.
+    /// wrap its body in an SSE parser, JSONL parser, or other line-oriented
+    /// reader. Non-2xx responses are mapped to [`Error::Api`] (with
+    /// `request-id` and `Retry-After`) just like [`Self::execute`]; the
+    /// body is consumed in that case.
     ///
     /// Streaming is *not* retried -- once the server starts emitting events,
     /// retrying mid-stream would silently drop content.
-    #[cfg(feature = "streaming")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "streaming")))]
     pub(crate) async fn execute_streaming(
         &self,
         mut builder: reqwest::RequestBuilder,

@@ -1,4 +1,4 @@
-//! Agent loop example: `Client::run` drives the tool_use loop automatically.
+//! Agent loop example: `Client::run` drives the `tool_use` loop automatically.
 //!
 //! Compare with `tool_use.rs` which writes the same loop by hand. This one
 //! collapses to a single `client.run(...)` call.
@@ -41,8 +41,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     );
 
-    let mut convo = Conversation::new(ModelId::SONNET_4_6, 1024)
-        .system("You are a concise assistant.");
+    let mut convo =
+        Conversation::new(ModelId::SONNET_4_6, 1024).system("You are a concise assistant.");
     convo.push_user("What's the weather in Paris and Tokyo? Be brief.");
 
     let options = RunOptions::default()

@@ -48,6 +48,8 @@ pub mod tool_dispatch;
 
 pub mod types;
 
+pub mod batches;
+pub mod files;
 pub mod messages;
 pub mod models;
 

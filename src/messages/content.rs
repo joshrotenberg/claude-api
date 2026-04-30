@@ -23,6 +23,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::messages::cache::CacheControl;
+use crate::messages::citation::Citation;
 
 /// One block of content within a message.
 ///
@@ -51,11 +52,9 @@ pub enum KnownBlock {
         /// Optional cache breakpoint.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
-        /// Optional citations attached to this text. Modeled as raw JSON for
-        /// v0.1; will land as a typed enum once the citations feature is
-        /// fully fleshed out.
+        /// Citations the model attached to this text span, if any.
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        citations: Option<Vec<serde_json::Value>>,
+        citations: Option<Vec<Citation>>,
     },
     /// An image embedded in the message.
     Image {

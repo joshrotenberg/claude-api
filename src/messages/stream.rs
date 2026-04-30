@@ -210,11 +210,10 @@ pub enum KnownContentDelta {
         /// Updated signature.
         signature: String,
     },
-    /// Append a citation to a `text` block. Modeled as raw JSON for v0.1
-    /// (matches the typing decision in [`super::content`]).
+    /// Append a citation to a `text` block.
     CitationsDelta {
-        /// The citation payload.
-        citation: serde_json::Value,
+        /// The citation payload (typed enum with forward-compat fallback).
+        citation: crate::messages::citation::Citation,
     },
 }
 
@@ -474,13 +473,27 @@ mod tests {
 
     #[test]
     fn citations_delta_round_trips() {
+        use crate::messages::citation::{Citation, KnownCitation};
         round_trip_delta(
             &ContentDelta::Known(KnownContentDelta::CitationsDelta {
-                citation: json!({"type": "char_location", "start": 0, "end": 4}),
+                citation: Citation::Known(KnownCitation::CharLocation {
+                    document_index: 0,
+                    document_title: Some("Doc".into()),
+                    cited_text: "hello".into(),
+                    start_char_index: 0,
+                    end_char_index: 5,
+                }),
             }),
             &json!({
                 "type": "citations_delta",
-                "citation": {"type": "char_location", "start": 0, "end": 4}
+                "citation": {
+                    "type": "char_location",
+                    "document_index": 0,
+                    "document_title": "Doc",
+                    "cited_text": "hello",
+                    "start_char_index": 0,
+                    "end_char_index": 5
+                }
             }),
         );
     }

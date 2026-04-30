@@ -115,6 +115,11 @@ impl Client {
             let span = tracing::info_span!("agent_iteration", iteration);
             let _enter = span.enter();
 
+            // Apply context compaction if the conversation has a policy
+            // configured. Long-running agent loops are exactly where this
+            // matters most.
+            conversation.compact_if_needed();
+
             // Build the request, replacing the conversation's tools with the
             // registry's authoritative list. Documented behavior: in run()
             // mode the registry is the source of truth for tool definitions.

@@ -29,7 +29,7 @@ struct WeatherArgs {
 #[derive(JsonSchema, Deserialize)]
 #[allow(dead_code)]
 struct TimeArgs {
-    /// IANA timezone identifier (e.g. "America/Los_Angeles").
+    /// IANA timezone identifier (e.g. `America/Los_Angeles`).
     timezone: String,
 }
 
@@ -59,7 +59,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     convo.push_user("What's the weather in Berlin in Celsius and the local time in NYC?");
 
     let final_msg = client
-        .run(&mut convo, &registry, RunOptions::default().max_iterations(8))
+        .run(
+            &mut convo,
+            &registry,
+            RunOptions::default().max_iterations(8),
+        )
         .await?;
 
     for block in &final_msg.content {
