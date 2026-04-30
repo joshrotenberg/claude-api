@@ -1,0 +1,116 @@
+[package]
+name = "claude-api"
+version = "0.2.0"
+edition = "2021"
+rust-version = "1.82"
+description = "Type-safe Rust client for the Anthropic API"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/joshrotenberg/anthropic-rs"
+keywords = ["anthropic", "claude", "api", "ai", "llm"]
+categories = ["api-bindings", "asynchronous"]
+readme = "README.md"
+documentation = "https://docs.rs/claude-api"
+
+[features]
+default = ["async", "rustls", "streaming"]
+
+async = ["dep:tokio", "dep:reqwest", "dep:async-trait"]
+sync = ["dep:reqwest", "reqwest?/blocking"]
+
+rustls = ["reqwest?/rustls-tls"]
+native-tls = ["reqwest?/native-tls"]
+
+streaming = [
+    "dep:eventsource-stream",
+    "dep:futures-util",
+    "dep:bytes",
+    "reqwest?/stream",
+]
+
+schemars-tools = ["dep:schemars"]
+
+bedrock = ["dep:aws-sigv4", "dep:aws-credential-types"]
+vertex = ["dep:gcp_auth"]
+
+admin = []
+managed-agents = []
+pricing = []
+conversation = ["async"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+http = "1.1"
+
+tokio = { version = "1", features = ["time", "sync"], optional = true }
+reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
+async-trait = { version = "0.1", optional = true }
+
+eventsource-stream = { version = "0.2", optional = true }
+futures-util = { version = "0.3", optional = true }
+bytes = { version = "1", optional = true }
+
+schemars = { version = "0.8", optional = true }
+
+aws-sigv4 = { version = "1", optional = true }
+aws-credential-types = { version = "1", optional = true }
+gcp_auth = { version = "0.12", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+wiremock = "0.6"
+pretty_assertions = "1.4"
+serde_json = "1.0"
+futures-util = "0.3"
+
+[[example]]
+name = "basic"
+required-features = ["async"]
+
+[[example]]
+name = "streaming"
+required-features = ["async", "streaming"]
+
+[[example]]
+name = "tool_use"
+required-features = ["async"]
+
+[[example]]
+name = "vision"
+required-features = ["async"]
+
+[[example]]
+name = "document"
+required-features = ["async"]
+
+[[example]]
+name = "conversation"
+required-features = ["async", "conversation", "pricing"]
+
+[[example]]
+name = "agent_loop"
+required-features = ["async", "conversation"]
+
+[[example]]
+name = "typed_tools"
+required-features = ["async", "conversation", "schemars-tools"]
+
+[[example]]
+name = "blocking"
+required-features = ["sync"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]

@@ -1,0 +1,7 @@
+/target
+Cargo.lock.bak
+**/*.rs.bk
+
+# Local Claude context (per global standards, not version-controlled)
+CLAUDE.md
+.claude/settings.local.json
