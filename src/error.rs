@@ -58,6 +58,19 @@ pub enum Error {
         /// Configured iteration cap.
         max: u32,
     },
+    /// The agent loop's configured cost budget was exceeded after a turn.
+    /// `spent_usd` reflects the cumulative cost recorded on the conversation
+    /// at the moment the budget check fired.
+    #[error("agent loop exceeded cost budget: ${spent_usd:.4} > ${budget_usd:.4}")]
+    CostBudgetExceeded {
+        /// Configured ceiling.
+        budget_usd: f64,
+        /// Cumulative spend at the time of the check.
+        spent_usd: f64,
+    },
+    /// A cancellation token signaled abort between iterations.
+    #[error("agent loop cancelled")]
+    Cancelled,
 }
 
 impl Error {
@@ -80,7 +93,9 @@ impl Error {
             Error::Decode(_)
             | Error::InvalidConfig(_)
             | Error::Io(_)
-            | Error::MaxIterationsExceeded { .. } => false,
+            | Error::MaxIterationsExceeded { .. }
+            | Error::CostBudgetExceeded { .. }
+            | Error::Cancelled => false,
         }
     }
 

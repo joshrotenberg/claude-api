@@ -386,6 +386,24 @@ impl CountTokensRequest {
     }
 }
 
+impl From<&CreateMessageRequest> for CountTokensRequest {
+    /// Project a [`CreateMessageRequest`] onto the subset of fields the
+    /// count-tokens endpoint accepts. Sampling parameters (`temperature`,
+    /// `top_p`, etc.) and `max_tokens` are dropped because they don't
+    /// affect tokenization.
+    fn from(req: &CreateMessageRequest) -> Self {
+        Self {
+            model: req.model.clone(),
+            messages: req.messages.clone(),
+            system: req.system.clone(),
+            tools: req.tools.clone(),
+            tool_choice: req.tool_choice.clone(),
+            thinking: req.thinking,
+            mcp_servers: req.mcp_servers.clone(),
+        }
+    }
+}
+
 /// Builder for [`CountTokensRequest`].
 #[derive(Debug, Default)]
 pub struct CountTokensRequestBuilder {

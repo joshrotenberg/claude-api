@@ -587,12 +587,18 @@ mod tests {
 /// or call [`Self::aggregate`] to drive the stream to completion and
 /// reconstruct a full [`Message`].
 ///
+/// Optional **callback hooks** can be attached via the `on_*` builder
+/// methods; they fire only during [`Self::aggregate`] (the raw `Stream`
+/// path is unaffected). Useful for token-by-token UI updates without
+/// pattern-matching `StreamEvent` yourself.
+///
 /// Mid-stream connection failures are not retried -- doing so would silently
 /// drop content. See [`crate::error::Error::is_retryable`].
 #[cfg(feature = "streaming")]
 #[cfg_attr(docsrs, doc(cfg(feature = "streaming")))]
 pub struct EventStream {
     inner: futures_util::stream::BoxStream<'static, Result<StreamEvent>>,
+    handlers: MessageStreamHandlers,
 }
 
 #[cfg(feature = "streaming")]
@@ -602,21 +608,151 @@ impl EventStream {
         use futures_util::StreamExt;
         Self {
             inner: crate::sse::into_typed_stream::<StreamEvent>(response).boxed(),
+            handlers: MessageStreamHandlers::default(),
         }
+    }
+
+    /// Test helper: build an `EventStream` from a pre-baked sequence of
+    /// `Result<StreamEvent>`s. Used to exercise callback wiring without a
+    /// real HTTP connection.
+    #[cfg(test)]
+    fn from_events(events: Vec<Result<StreamEvent>>) -> Self {
+        use futures_util::StreamExt;
+        Self {
+            inner: futures_util::stream::iter(events).boxed(),
+            handlers: MessageStreamHandlers::default(),
+        }
+    }
+
+    /// Attach a handler fired on each text-delta inside a `text` content block.
+    /// The closure receives only the new chunk; the running concatenation is
+    /// available via the final [`Message`] returned by [`Self::aggregate`].
+    #[must_use]
+    pub fn on_text_delta<F>(mut self, handler: F) -> Self
+    where
+        F: FnMut(&str) + Send + 'static,
+    {
+        self.handlers.text_delta = Some(Box::new(handler));
+        self
+    }
+
+    /// Attach a handler fired when a `tool_use` content block finishes
+    /// streaming (its `input` JSON is fully reconstructed). The closure
+    /// receives `(id, name, &input)`. Also fires for `server_tool_use`
+    /// blocks (e.g. web search invocations).
+    #[must_use]
+    pub fn on_tool_use_complete<F>(mut self, handler: F) -> Self
+    where
+        F: FnMut(&str, &str, &serde_json::Value) + Send + 'static,
+    {
+        self.handlers.tool_use_complete = Some(Box::new(handler));
+        self
+    }
+
+    /// Attach a handler fired on each delta inside a `thinking` block.
+    #[must_use]
+    pub fn on_thinking_delta<F>(mut self, handler: F) -> Self
+    where
+        F: FnMut(&str) + Send + 'static,
+    {
+        self.handlers.thinking_delta = Some(Box::new(handler));
+        self
+    }
+
+    /// Attach a handler fired once when the stream's final `message_stop`
+    /// event arrives. Receives the cumulative [`Usage`] from the message.
+    #[must_use]
+    pub fn on_message_stop<F>(mut self, handler: F) -> Self
+    where
+        F: FnMut(&Usage) + Send + 'static,
+    {
+        self.handlers.message_stop = Some(Box::new(handler));
+        self
+    }
+
+    /// Attach a handler fired when the server emits an `error` stream event
+    /// or when a stream-parse failure escapes mid-aggregation. The closure
+    /// runs before the error propagates back to the caller of
+    /// [`Self::aggregate`].
+    #[must_use]
+    pub fn on_error<F>(mut self, handler: F) -> Self
+    where
+        F: FnMut(&Error) + Send + 'static,
+    {
+        self.handlers.error = Some(Box::new(handler));
+        self
     }
 
     /// Drive the stream to completion and return the reconstructed [`Message`].
     ///
     /// Equivalent to using `messages.create(...)` non-streamed -- the same
-    /// final [`Message`] payload is produced.
+    /// final [`Message`] payload is produced. If callback hooks were
+    /// attached via the `on_*` builder methods, they fire as their
+    /// corresponding events are processed.
     pub async fn aggregate(self) -> Result<Message> {
         use futures_util::StreamExt;
-        let mut stream = self.inner;
-        let mut agg = Aggregator::default();
-        while let Some(event) = stream.next().await {
-            agg.handle(event?)?;
+        let Self {
+            mut inner,
+            handlers,
+        } = self;
+        let mut agg = Aggregator::with_handlers(handlers);
+        while let Some(event) = inner.next().await {
+            match event {
+                Ok(ev) => match agg.handle(ev) {
+                    Ok(()) => {}
+                    Err(e) => {
+                        agg.fire_error(&e);
+                        return Err(e);
+                    }
+                },
+                Err(e) => {
+                    agg.fire_error(&e);
+                    return Err(e);
+                }
+            }
         }
         agg.finalize()
+    }
+}
+
+#[cfg(feature = "streaming")]
+type TextDeltaHandler = Box<dyn FnMut(&str) + Send>;
+#[cfg(feature = "streaming")]
+type ToolUseCompleteHandler = Box<dyn FnMut(&str, &str, &serde_json::Value) + Send>;
+#[cfg(feature = "streaming")]
+type ThinkingDeltaHandler = Box<dyn FnMut(&str) + Send>;
+#[cfg(feature = "streaming")]
+type MessageStopHandler = Box<dyn FnMut(&Usage) + Send>;
+#[cfg(feature = "streaming")]
+type ErrorHandler = Box<dyn FnMut(&Error) + Send>;
+
+/// Callback hooks fired during [`EventStream::aggregate`].
+#[cfg(feature = "streaming")]
+#[derive(Default)]
+struct MessageStreamHandlers {
+    text_delta: Option<TextDeltaHandler>,
+    tool_use_complete: Option<ToolUseCompleteHandler>,
+    thinking_delta: Option<ThinkingDeltaHandler>,
+    message_stop: Option<MessageStopHandler>,
+    error: Option<ErrorHandler>,
+}
+
+#[cfg(feature = "streaming")]
+impl std::fmt::Debug for MessageStreamHandlers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("MessageStreamHandlers")
+            .field("text_delta", &self.text_delta.as_ref().map(|_| "<fn>"))
+            .field(
+                "tool_use_complete",
+                &self.tool_use_complete.as_ref().map(|_| "<fn>"),
+            )
+            .field(
+                "thinking_delta",
+                &self.thinking_delta.as_ref().map(|_| "<fn>"),
+            )
+            .field("message_stop", &self.message_stop.as_ref().map(|_| "<fn>"))
+            .field("error", &self.error.as_ref().map(|_| "<fn>"))
+            .finish()
     }
 }
 
@@ -652,10 +788,28 @@ pub struct Aggregator {
     /// `ContentBlockStop` and stored back on the corresponding `ToolUse`
     /// or `ServerToolUse` block's `input`.
     tool_input_buffers: std::collections::HashMap<u32, String>,
+    handlers: MessageStreamHandlers,
 }
 
 #[cfg(feature = "streaming")]
 impl Aggregator {
+    /// Build an Aggregator pre-populated with stream callback hooks.
+    /// Internal -- callers wire handlers through [`EventStream`].
+    fn with_handlers(handlers: MessageStreamHandlers) -> Self {
+        Self {
+            handlers,
+            ..Self::default()
+        }
+    }
+
+    /// Fire the `error` handler for an aborting error. Internal helper
+    /// for [`EventStream::aggregate`].
+    fn fire_error(&mut self, err: &Error) {
+        if let Some(h) = self.handlers.error.as_mut() {
+            h(err);
+        }
+    }
+
     /// Apply one event to the aggregator's state.
     pub fn handle(&mut self, event: StreamEvent) -> Result<()> {
         match event {
@@ -692,6 +846,16 @@ impl Aggregator {
                 if let Some(buf) = self.tool_input_buffers.remove(&index) {
                     self.finalize_tool_input(index, &buf);
                 }
+                // Fire on_tool_use_complete for tool_use / server_tool_use blocks.
+                if let Some(handler) = self.handlers.tool_use_complete.as_mut() {
+                    if let Some(ContentBlock::Known(
+                        KnownBlock::ToolUse { id, name, input }
+                        | KnownBlock::ServerToolUse { id, name, input },
+                    )) = self.blocks.get(index as usize)
+                    {
+                        handler(id, name, input);
+                    }
+                }
             }
             KnownStreamEvent::MessageDelta { delta, usage } => {
                 if let Some(msg) = self.message.as_mut() {
@@ -704,7 +868,14 @@ impl Aggregator {
                     msg.usage = usage;
                 }
             }
-            KnownStreamEvent::MessageStop | KnownStreamEvent::Ping => {}
+            KnownStreamEvent::MessageStop => {
+                if let Some(handler) = self.handlers.message_stop.as_mut() {
+                    if let Some(msg) = self.message.as_ref() {
+                        handler(&msg.usage);
+                    }
+                }
+            }
+            KnownStreamEvent::Ping => {}
             KnownStreamEvent::Error { error } => {
                 return Err(Error::Stream(StreamError::Server {
                     kind: error.kind,
@@ -725,6 +896,9 @@ impl Aggregator {
                 if let ContentBlock::Known(KnownBlock::Text { text: existing, .. }) = block {
                     existing.push_str(&text);
                 }
+                if let Some(handler) = self.handlers.text_delta.as_mut() {
+                    handler(&text);
+                }
             }
             ContentDelta::Known(KnownContentDelta::InputJsonDelta { partial_json }) => {
                 self.tool_input_buffers
@@ -738,6 +912,9 @@ impl Aggregator {
                 }) = block
                 {
                     existing.push_str(&thinking);
+                }
+                if let Some(handler) = self.handlers.thinking_delta.as_mut() {
+                    handler(&thinking);
                 }
             }
             ContentDelta::Known(KnownContentDelta::SignatureDelta { signature }) => {
@@ -1041,5 +1218,299 @@ mod aggregator_tests {
         let agg = Aggregator::default();
         let err = agg.finalize().unwrap_err();
         assert!(matches!(err, Error::Stream(StreamError::Parse(_))));
+    }
+}
+
+#[cfg(all(test, feature = "streaming"))]
+mod stream_callback_tests {
+    use super::*;
+    use crate::error::{ApiErrorKind, ApiErrorPayload};
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use std::sync::{Arc, Mutex};
+
+    fn message_start_event() -> StreamEvent {
+        StreamEvent::Known(KnownStreamEvent::MessageStart {
+            message: serde_json::from_value(json!({
+                "id": "msg_x",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "model": "claude-sonnet-4-6",
+                "usage": {"input_tokens": 5, "output_tokens": 0}
+            }))
+            .unwrap(),
+        })
+    }
+
+    #[tokio::test]
+    async fn on_text_delta_fires_for_each_text_chunk() {
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&captured);
+        let events = vec![
+            Ok(message_start_event()),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlock::text(""),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::Known(KnownContentDelta::TextDelta {
+                    text: "Hello".into(),
+                }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::Known(KnownContentDelta::TextDelta {
+                    text: " world".into(),
+                }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStop {
+                index: 0,
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::MessageStop)),
+        ];
+
+        let stream = EventStream::from_events(events).on_text_delta(move |chunk| {
+            sink.lock().unwrap().push(chunk.to_string());
+        });
+        stream.aggregate().await.unwrap();
+
+        assert_eq!(*captured.lock().unwrap(), vec!["Hello", " world"]);
+    }
+
+    #[tokio::test]
+    async fn on_tool_use_complete_fires_with_parsed_input() {
+        let captured: Arc<Mutex<Vec<(String, String, serde_json::Value)>>> =
+            Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&captured);
+        let events = vec![
+            Ok(message_start_event()),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlock::Known(KnownBlock::ToolUse {
+                    id: "toolu_1".into(),
+                    name: "get_weather".into(),
+                    input: json!({}),
+                }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::Known(KnownContentDelta::InputJsonDelta {
+                    partial_json: "{\"city\":\"Paris\"}".into(),
+                }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStop {
+                index: 0,
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::MessageStop)),
+        ];
+
+        let stream =
+            EventStream::from_events(events).on_tool_use_complete(move |id, name, input| {
+                sink.lock()
+                    .unwrap()
+                    .push((id.to_string(), name.to_string(), input.clone()));
+            });
+        stream.aggregate().await.unwrap();
+
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].0, "toolu_1");
+        assert_eq!(captured[0].1, "get_weather");
+        assert_eq!(captured[0].2, json!({"city": "Paris"}));
+    }
+
+    #[tokio::test]
+    async fn on_tool_use_complete_fires_for_server_tool_use_blocks() {
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&captured);
+        let events = vec![
+            Ok(message_start_event()),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlock::Known(KnownBlock::ServerToolUse {
+                    id: "srvu_1".into(),
+                    name: "web_search".into(),
+                    input: json!({}),
+                }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::Known(KnownContentDelta::InputJsonDelta {
+                    partial_json: "{\"q\":\"rust\"}".into(),
+                }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStop {
+                index: 0,
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::MessageStop)),
+        ];
+
+        let stream = EventStream::from_events(events).on_tool_use_complete(move |id, _, _| {
+            sink.lock().unwrap().push(id.to_string());
+        });
+        stream.aggregate().await.unwrap();
+
+        assert_eq!(*captured.lock().unwrap(), vec!["srvu_1"]);
+    }
+
+    #[tokio::test]
+    async fn on_thinking_delta_fires_for_each_thinking_chunk() {
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&captured);
+        let events = vec![
+            Ok(message_start_event()),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlock::Known(KnownBlock::Thinking {
+                    thinking: String::new(),
+                    signature: String::new(),
+                }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::Known(KnownContentDelta::ThinkingDelta {
+                    thinking: "let me ".into(),
+                }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::Known(KnownContentDelta::ThinkingDelta {
+                    thinking: "think".into(),
+                }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStop {
+                index: 0,
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::MessageStop)),
+        ];
+
+        let stream = EventStream::from_events(events).on_thinking_delta(move |chunk| {
+            sink.lock().unwrap().push(chunk.to_string());
+        });
+        stream.aggregate().await.unwrap();
+
+        assert_eq!(*captured.lock().unwrap(), vec!["let me ", "think"]);
+    }
+
+    #[tokio::test]
+    async fn on_message_stop_fires_once_with_usage() {
+        let captured: Arc<Mutex<Vec<Usage>>> = Arc::new(Mutex::new(Vec::new()));
+        let sink = Arc::clone(&captured);
+        let events = vec![
+            Ok(message_start_event()),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlock::text(""),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::Known(KnownContentDelta::TextDelta { text: "hi".into() }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStop {
+                index: 0,
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::MessageDelta {
+                delta: MessageDelta {
+                    stop_reason: Some(StopReason::EndTurn),
+                    stop_sequence: None,
+                },
+                usage: Usage {
+                    input_tokens: 5,
+                    output_tokens: 7,
+                    ..Usage::default()
+                },
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::MessageStop)),
+        ];
+
+        let stream = EventStream::from_events(events).on_message_stop(move |usage| {
+            sink.lock().unwrap().push(usage.clone());
+        });
+        stream.aggregate().await.unwrap();
+
+        let captured = captured.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].input_tokens, 5);
+        assert_eq!(captured[0].output_tokens, 7);
+    }
+
+    #[tokio::test]
+    async fn on_error_fires_before_propagating_server_error() {
+        let count = Arc::new(Mutex::new(0u32));
+        let sink = Arc::clone(&count);
+        let events = vec![
+            Ok(message_start_event()),
+            Ok(StreamEvent::Known(KnownStreamEvent::Error {
+                error: ApiErrorPayload {
+                    kind: ApiErrorKind::OverloadedError,
+                    message: "boom".into(),
+                },
+            })),
+        ];
+
+        let stream = EventStream::from_events(events).on_error(move |_| {
+            *sink.lock().unwrap() += 1;
+        });
+        let err = stream.aggregate().await.unwrap_err();
+        assert!(matches!(
+            err,
+            Error::Stream(StreamError::Server {
+                kind: ApiErrorKind::OverloadedError,
+                ..
+            })
+        ));
+        assert_eq!(
+            *count.lock().unwrap(),
+            1,
+            "handler should fire exactly once"
+        );
+    }
+
+    #[tokio::test]
+    async fn on_error_fires_for_transport_error() {
+        let count = Arc::new(Mutex::new(0u32));
+        let sink = Arc::clone(&count);
+        let events: Vec<Result<StreamEvent>> = vec![
+            Ok(message_start_event()),
+            Err(Error::Stream(StreamError::Parse("decode failed".into()))),
+        ];
+
+        let stream = EventStream::from_events(events).on_error(move |_| {
+            *sink.lock().unwrap() += 1;
+        });
+        let err = stream.aggregate().await.unwrap_err();
+        assert!(matches!(err, Error::Stream(StreamError::Parse(_))));
+        assert_eq!(*count.lock().unwrap(), 1);
+    }
+
+    #[tokio::test]
+    async fn raw_stream_iteration_does_not_fire_callbacks() {
+        use futures_util::StreamExt;
+        let count = Arc::new(Mutex::new(0u32));
+        let sink = Arc::clone(&count);
+        let events = vec![
+            Ok(message_start_event()),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStart {
+                index: 0,
+                content_block: ContentBlock::text(""),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockDelta {
+                index: 0,
+                delta: ContentDelta::Known(KnownContentDelta::TextDelta { text: "hi".into() }),
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::ContentBlockStop {
+                index: 0,
+            })),
+            Ok(StreamEvent::Known(KnownStreamEvent::MessageStop)),
+        ];
+
+        let mut stream = EventStream::from_events(events).on_text_delta(move |_| {
+            *sink.lock().unwrap() += 1;
+        });
+        while let Some(_ev) = stream.next().await {}
+        // Callbacks only fire during aggregate(), not raw .next().
+        assert_eq!(*count.lock().unwrap(), 0);
     }
 }

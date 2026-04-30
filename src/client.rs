@@ -232,6 +232,49 @@ impl Client {
     pub(crate) fn betas(&self) -> &[String] {
         &self.inner.betas
     }
+
+    /// Materialize a request without sending it, for use by namespace-level
+    /// `dry_run` helpers. Mirrors the header logic in
+    /// [`Self::execute`]/[`Self::execute_streaming`] so the rendered
+    /// preview matches what would actually be transmitted.
+    pub(crate) fn render_dry_run(
+        &self,
+        mut builder: reqwest::RequestBuilder,
+        per_request_betas: &[&str],
+    ) -> Result<crate::dry_run::DryRun> {
+        if let Some(joined) = merge_betas(&self.inner.betas, per_request_betas) {
+            builder = builder.header("anthropic-beta", joined);
+        }
+        let req = builder.build()?;
+        let method = req.method().clone();
+        let url = req.url().to_string();
+        let mut headers = http::HeaderMap::new();
+        for (name, value) in req.headers() {
+            // Convert reqwest::header::HeaderName/Value (re-exports of http
+            // types) into the http crate's owned types.
+            if let (Ok(name), Ok(value)) = (
+                http::HeaderName::from_bytes(name.as_ref()),
+                http::HeaderValue::from_bytes(value.as_bytes()),
+            ) {
+                headers.append(name, value);
+            }
+        }
+        let body = if let Some(body) = req.body() {
+            if let Some(bytes) = body.as_bytes() {
+                serde_json::from_slice(bytes).unwrap_or(serde_json::Value::Null)
+            } else {
+                serde_json::Value::Null
+            }
+        } else {
+            serde_json::Value::Null
+        };
+        Ok(crate::dry_run::DryRun {
+            method,
+            url,
+            headers,
+            body,
+        })
+    }
 }
 
 /// Merge client-level and per-request beta values into a single

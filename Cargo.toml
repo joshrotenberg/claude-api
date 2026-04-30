@@ -1,6 +1,9 @@
+[workspace]
+members = [".", "claude-api-derive"]
+
 [package]
 name = "claude-api"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Type-safe Rust client for the Anthropic API"
@@ -33,6 +36,8 @@ streaming = ["dep:eventsource-stream"]
 
 schemars-tools = ["dep:schemars"]
 
+derive = ["dep:claude-api-derive", "schemars-tools", "async"]
+
 bedrock = ["dep:aws-sigv4", "dep:aws-credential-types"]
 vertex = ["dep:gcp_auth"]
 
@@ -49,7 +54,7 @@ tracing = "0.1"
 http = "1.1"
 
 tokio = { version = "1", features = ["time", "sync"], optional = true }
-tokio-util = { version = "0.7", features = ["io"], optional = true }
+tokio-util = { version = "0.7", features = ["io", "rt"], optional = true }
 reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
 async-trait = { version = "0.1", optional = true }
 
@@ -62,6 +67,8 @@ schemars = { version = "0.8", optional = true }
 aws-sigv4 = { version = "1", optional = true }
 aws-credential-types = { version = "1", optional = true }
 gcp_auth = { version = "0.12", optional = true }
+
+claude-api-derive = { version = "0.4.0", path = "claude-api-derive", optional = true }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
@@ -76,6 +83,10 @@ required-features = ["async"]
 
 [[example]]
 name = "streaming"
+required-features = ["async", "streaming"]
+
+[[example]]
+name = "streaming_callbacks"
 required-features = ["async", "streaming"]
 
 [[example]]
@@ -101,6 +112,10 @@ required-features = ["async", "conversation"]
 [[example]]
 name = "typed_tools"
 required-features = ["async", "conversation", "schemars-tools"]
+
+[[example]]
+name = "derived_tool"
+required-features = ["async", "conversation", "derive"]
 
 [[example]]
 name = "blocking"

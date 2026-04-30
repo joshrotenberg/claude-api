@@ -268,12 +268,13 @@ dependencies = [
 
 [[package]]
 name = "claude-api"
-version = "0.2.0"
+version = "0.4.0"
 dependencies = [
  "async-trait",
  "aws-credential-types",
  "aws-sigv4",
  "bytes",
+ "claude-api-derive",
  "eventsource-stream",
  "futures-util",
  "gcp_auth",
@@ -288,6 +289,15 @@ dependencies = [
  "tokio-util",
  "tracing",
  "wiremock",
+]
+
+[[package]]
+name = "claude-api-derive"
+version = "0.4.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
@@ -1956,6 +1966,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

@@ -8,6 +8,7 @@
 #![cfg(feature = "async")]
 
 use crate::client::Client;
+use crate::dry_run::DryRun;
 use crate::error::Result;
 use crate::messages::request::{CountTokensRequest, CreateMessageRequest};
 use crate::messages::response::{CountTokensResponse, Message};
@@ -79,6 +80,93 @@ impl<'a> Messages<'a> {
                 betas,
             )
             .await
+    }
+
+    /// Render the HTTP request that [`Self::create`] would send, without
+    /// firing it. Returns a [`DryRun`] containing the rendered method, URL,
+    /// headers, and JSON body. Useful for tests, debugging, and reproducing
+    /// requests as curl commands.
+    pub fn dry_run(&self, request: &CreateMessageRequest) -> Result<DryRun> {
+        self.dry_run_with_beta(request, &[])
+    }
+
+    /// Like [`Self::dry_run`] but with per-request beta headers merged in,
+    /// matching [`Self::create_with_beta`].
+    pub fn dry_run_with_beta(
+        &self,
+        request: &CreateMessageRequest,
+        betas: &[&str],
+    ) -> Result<DryRun> {
+        let builder = self
+            .client
+            .request_builder(reqwest::Method::POST, "/v1/messages")
+            .json(request);
+        self.client.render_dry_run(builder, betas)
+    }
+
+    /// Estimate the USD cost of a request before sending it.
+    ///
+    /// Hits `/v1/messages/count_tokens` to get the exact server-counted
+    /// input-token total, then uses `request.max_tokens` as the output upper
+    /// bound. The returned [`CostPreview`](crate::cost_preview::CostPreview)
+    /// exposes input / max-output / max-total cost components.
+    ///
+    /// Pre-flight charge from this call: one count-tokens request
+    /// (significantly cheaper than a full generation, but not free).
+    #[cfg(feature = "pricing")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "pricing")))]
+    pub async fn cost_preview(
+        &self,
+        request: &CreateMessageRequest,
+        pricing: &crate::pricing::PricingTable,
+    ) -> Result<crate::cost_preview::CostPreview> {
+        use crate::types::Usage;
+        let count = self.count_tokens(CountTokensRequest::from(request)).await?;
+        let input_tokens = count.input_tokens;
+        let max_output_tokens = request.max_tokens;
+        let input_cost_usd = pricing.cost(
+            &request.model,
+            &Usage {
+                input_tokens,
+                output_tokens: 0,
+                ..Usage::default()
+            },
+        );
+        let max_total_usd = pricing.cost(
+            &request.model,
+            &Usage {
+                input_tokens,
+                output_tokens: max_output_tokens,
+                ..Usage::default()
+            },
+        );
+        let max_output_cost_usd = max_total_usd - input_cost_usd;
+        Ok(crate::cost_preview::CostPreview {
+            model: request.model.clone(),
+            input_tokens,
+            max_output_tokens,
+            input_cost_usd,
+            max_output_cost_usd,
+            max_total_usd,
+        })
+    }
+
+    /// Render the HTTP request that [`Self::count_tokens`] would send.
+    pub fn dry_run_count_tokens(&self, request: &CountTokensRequest) -> Result<DryRun> {
+        self.dry_run_count_tokens_with_beta(request, &[])
+    }
+
+    /// Like [`Self::dry_run_count_tokens`] but with per-request beta headers.
+    pub fn dry_run_count_tokens_with_beta(
+        &self,
+        request: &CountTokensRequest,
+        betas: &[&str],
+    ) -> Result<DryRun> {
+        let builder = self
+            .client
+            .request_builder(reqwest::Method::POST, "/v1/messages/count_tokens")
+            .json(request);
+        self.client.render_dry_run(builder, betas)
     }
 
     /// Open a streaming connection to `POST /v1/messages` and return an
@@ -214,6 +302,73 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn dry_run_renders_request_without_sending() {
+        // No mock mounted: any actual HTTP call would 404 the test.
+        let mock = MockServer::start().await;
+        let client = client_for(&mock);
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(64)
+            .user("hello")
+            .build()
+            .unwrap();
+
+        let dr = client.messages().dry_run(&req).unwrap();
+
+        assert_eq!(dr.method, reqwest::Method::POST);
+        assert_eq!(dr.url, format!("{}/v1/messages", mock.uri()));
+        assert_eq!(dr.headers.get("x-api-key").unwrap(), "sk-ant-test");
+        assert_eq!(
+            dr.headers.get("anthropic-version").unwrap(),
+            crate::ANTHROPIC_VERSION
+        );
+        // Body round-trips the request.
+        assert_eq!(dr.body["model"], "claude-sonnet-4-6");
+        assert_eq!(dr.body["max_tokens"], 64);
+        assert_eq!(dr.body["messages"][0]["role"], "user");
+
+        // No request actually went out.
+        assert_eq!(mock.received_requests().await.unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn dry_run_with_beta_includes_anthropic_beta_header() {
+        let mock = MockServer::start().await;
+        let client = client_for(&mock);
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(8)
+            .user("x")
+            .build()
+            .unwrap();
+
+        let dr = client
+            .messages()
+            .dry_run_with_beta(&req, &["computer-use-2025-01-24"])
+            .unwrap();
+
+        assert_eq!(
+            dr.headers.get("anthropic-beta").unwrap(),
+            "computer-use-2025-01-24"
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_count_tokens_uses_count_tokens_path() {
+        let mock = MockServer::start().await;
+        let client = client_for(&mock);
+        let req = CountTokensRequest::builder()
+            .model(ModelId::HAIKU_4_5)
+            .user("x")
+            .build()
+            .unwrap();
+
+        let dr = client.messages().dry_run_count_tokens(&req).unwrap();
+        assert!(dr.url.ends_with("/v1/messages/count_tokens"));
+        assert_eq!(dr.body["model"], "claude-haiku-4-5-20251001");
+    }
+
+    #[tokio::test]
     async fn create_propagates_api_error_with_request_id() {
         let mock = MockServer::start().await;
         Mock::given(method("POST"))
@@ -263,6 +418,94 @@ mod tests {
             .unwrap();
         let resp = client.messages().count_tokens(req).await.unwrap();
         assert_eq!(resp.input_tokens, 7);
+    }
+
+    #[cfg(feature = "pricing")]
+    #[tokio::test]
+    async fn cost_preview_calls_count_tokens_and_computes_bounds() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages/count_tokens"))
+            .and(body_partial_json(json!({
+                "model": "claude-sonnet-4-6",
+                "messages": [{"role": "user", "content": "hi"}]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"input_tokens": 1000})))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(2000)
+            .user("hi")
+            .build()
+            .unwrap();
+
+        let pricing = crate::pricing::PricingTable::default();
+        let preview = client
+            .messages()
+            .cost_preview(&req, &pricing)
+            .await
+            .unwrap();
+
+        // Sonnet 4.6 default rates: $3/Mtok input, $15/Mtok output
+        assert_eq!(preview.input_tokens, 1000);
+        assert_eq!(preview.max_output_tokens, 2000);
+        // 1000 input * $3/Mtok = $0.003
+        assert!((preview.input_cost_usd - 0.003).abs() < 1e-9);
+        // 2000 output * $15/Mtok = $0.030
+        assert!((preview.max_output_cost_usd - 0.030).abs() < 1e-9);
+        // total
+        assert!((preview.max_total_usd - 0.033).abs() < 1e-9);
+    }
+
+    #[cfg(feature = "pricing")]
+    #[tokio::test]
+    async fn cost_preview_cost_for_returns_point_estimate() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages/count_tokens"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"input_tokens": 1000})))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(5000)
+            .user("hi")
+            .build()
+            .unwrap();
+
+        let pricing = crate::pricing::PricingTable::default();
+        let preview = client
+            .messages()
+            .cost_preview(&req, &pricing)
+            .await
+            .unwrap();
+        // 1000 input + 500 output: $0.003 + $0.0075 = $0.0105
+        let estimate = preview.cost_for(500, &pricing);
+        assert!((estimate - 0.0105).abs() < 1e-9);
+    }
+
+    #[test]
+    fn count_tokens_request_from_create_drops_max_tokens_and_sampling() {
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(64)
+            .temperature(0.7)
+            .user("hello")
+            .build()
+            .unwrap();
+
+        let count_req = CountTokensRequest::from(&req);
+        assert_eq!(count_req.model, req.model);
+        assert_eq!(count_req.messages.len(), 1);
+        // Serialized form should not contain max_tokens or temperature.
+        let body = serde_json::to_value(&count_req).unwrap();
+        assert!(body.get("max_tokens").is_none());
+        assert!(body.get("temperature").is_none());
     }
 
     #[tokio::test]

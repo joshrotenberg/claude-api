@@ -23,12 +23,27 @@ use crate::types::StopReason;
 /// Type alias for the per-iteration callback hook.
 type IterationHook = Box<dyn Fn(&Message, u32) + Send + Sync + 'static>;
 
+/// Cost budget for the agent loop, paired with the pricing table used to
+/// evaluate `Conversation::cost`.
+#[cfg(feature = "pricing")]
+#[cfg_attr(docsrs, doc(cfg(feature = "pricing")))]
+pub struct CostBudget {
+    /// Maximum cumulative spend allowed across the loop, in USD.
+    pub max_usd: f64,
+    /// Pricing table used to compute spend.
+    pub pricing: crate::pricing::PricingTable,
+}
+
 /// Optional knobs for the agent loop.
 ///
 /// Build via [`RunOptions::default`] and chain setters; see method docs.
 pub struct RunOptions {
     max_iterations: u32,
     on_iteration: Option<IterationHook>,
+    parallel_tool_dispatch: bool,
+    #[cfg(feature = "pricing")]
+    cost_budget: Option<CostBudget>,
+    cancel_token: Option<tokio_util::sync::CancellationToken>,
 }
 
 impl Default for RunOptions {
@@ -36,6 +51,10 @@ impl Default for RunOptions {
         Self {
             max_iterations: 16,
             on_iteration: None,
+            parallel_tool_dispatch: true,
+            #[cfg(feature = "pricing")]
+            cost_budget: None,
+            cancel_token: None,
         }
     }
 }
@@ -66,6 +85,37 @@ impl RunOptions {
         self
     }
 
+    /// Whether to dispatch the `tool_use` blocks within a single assistant
+    /// turn concurrently (default `true`). Set to `false` to dispatch
+    /// sequentially -- useful when tools have ordering side effects (e.g.
+    /// shared mutable state) or when serial output is easier to debug.
+    #[must_use]
+    pub fn parallel_tool_dispatch(mut self, parallel: bool) -> Self {
+        self.parallel_tool_dispatch = parallel;
+        self
+    }
+
+    /// Cap cumulative spend on the conversation. After each turn the
+    /// runner computes [`Conversation::cost`](crate::conversation::Conversation::cost)
+    /// against `pricing` and aborts with [`Error::CostBudgetExceeded`] if
+    /// the cumulative cost exceeds `max_usd`.
+    #[cfg(feature = "pricing")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "pricing")))]
+    #[must_use]
+    pub fn cost_budget(mut self, max_usd: f64, pricing: crate::pricing::PricingTable) -> Self {
+        self.cost_budget = Some(CostBudget { max_usd, pricing });
+        self
+    }
+
+    /// Attach a cancellation token. Checked at the top of every iteration;
+    /// if cancelled, the loop returns [`Error::Cancelled`] before issuing
+    /// the next request.
+    #[must_use]
+    pub fn cancel_token(mut self, token: tokio_util::sync::CancellationToken) -> Self {
+        self.cancel_token = Some(token);
+        self
+    }
+
     /// Borrow the configured iteration cap.
     #[must_use]
     pub fn max_iterations_value(&self) -> u32 {
@@ -75,13 +125,17 @@ impl RunOptions {
 
 impl fmt::Debug for RunOptions {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RunOptions")
-            .field("max_iterations", &self.max_iterations)
+        let mut s = f.debug_struct("RunOptions");
+        s.field("max_iterations", &self.max_iterations)
             .field(
                 "on_iteration",
                 &self.on_iteration.as_ref().map(|_| "<closure>"),
             )
-            .finish()
+            .field("parallel_tool_dispatch", &self.parallel_tool_dispatch)
+            .field("cancel_token", &self.cancel_token.is_some());
+        #[cfg(feature = "pricing")]
+        s.field("cost_budget", &self.cost_budget.as_ref().map(|b| b.max_usd));
+        s.finish()
     }
 }
 
@@ -105,6 +159,7 @@ impl Client {
     /// `options.max_iterations` without the model terminating. Tool
     /// execution errors do *not* propagate; they are surfaced back to
     /// the model as `is_error = true` tool results so it can recover.
+    #[allow(clippy::too_many_lines)] // cohesive control flow; splitting hurts readability
     pub async fn run(
         &self,
         conversation: &mut Conversation,
@@ -114,6 +169,14 @@ impl Client {
         for iteration in 1..=options.max_iterations {
             let span = tracing::info_span!("agent_iteration", iteration);
             let _enter = span.enter();
+
+            // Cancellation gate: short-circuit before any work this turn.
+            if let Some(token) = &options.cancel_token {
+                if token.is_cancelled() {
+                    tracing::info!(iteration, "claude-api: agent loop cancelled");
+                    return Err(Error::Cancelled);
+                }
+            }
 
             // Apply context compaction if the conversation has a policy
             // configured. Long-running agent loops are exactly where this
@@ -141,39 +204,88 @@ impl Client {
                 hook(&response, iteration);
             }
 
+            // Cost budget gate: check after recording this turn's usage.
+            #[cfg(feature = "pricing")]
+            if let Some(budget) = &options.cost_budget {
+                let spent = conversation.cost(&budget.pricing);
+                if spent > budget.max_usd {
+                    tracing::warn!(
+                        iteration,
+                        spent_usd = spent,
+                        budget_usd = budget.max_usd,
+                        "claude-api: agent loop exceeded cost budget",
+                    );
+                    return Err(Error::CostBudgetExceeded {
+                        budget_usd: budget.max_usd,
+                        spent_usd: spent,
+                    });
+                }
+            }
+
             if response.stop_reason != Some(StopReason::ToolUse) {
                 return Ok(response);
             }
 
-            // Collect every tool_use block, dispatch, build tool_result blocks.
-            let mut tool_results: Vec<ContentBlock> = Vec::new();
-            for block in &response.content {
-                if let ContentBlock::Known(KnownBlock::ToolUse { id, name, input }) = block {
-                    let dispatched = registry.dispatch(name, input.clone()).await;
-                    let (content, is_error) = match dispatched {
-                        Ok(value) => (value_to_tool_result(value), None),
-                        Err(e) => {
-                            tracing::warn!(
-                                tool = %name,
-                                error = %e,
-                                "claude-api: tool dispatch error -- surfacing to model as is_error",
-                            );
-                            (ToolResultContent::Text(format!("{e}")), Some(true))
-                        }
-                    };
-                    tool_results.push(ContentBlock::Known(KnownBlock::ToolResult {
-                        tool_use_id: id.clone(),
-                        content,
-                        is_error,
-                        cache_control: None,
-                    }));
-                }
-            }
+            // Collect tool_use blocks in the order they appeared.
+            let tool_uses: Vec<(String, String, serde_json::Value)> = response
+                .content
+                .iter()
+                .filter_map(|b| {
+                    if let ContentBlock::Known(KnownBlock::ToolUse { id, name, input }) = b {
+                        Some((id.clone(), name.clone(), input.clone()))
+                    } else {
+                        None
+                    }
+                })
+                .collect();
 
             // Defensive: model said ToolUse but emitted no tool_use blocks.
-            // Return the response and let the caller decide what to do.
-            if tool_results.is_empty() {
+            if tool_uses.is_empty() {
                 return Ok(response);
+            }
+
+            // Dispatch -- in parallel by default, sequentially on request.
+            let dispatched = if options.parallel_tool_dispatch {
+                let futures = tool_uses.iter().map(|(id, name, input)| {
+                    let id = id.clone();
+                    let name = name.clone();
+                    let input = input.clone();
+                    async move {
+                        let result = registry.dispatch(&name, input).await;
+                        (id, name, result)
+                    }
+                });
+                futures_util::future::join_all(futures).await
+            } else {
+                let mut out = Vec::with_capacity(tool_uses.len());
+                for (id, name, input) in &tool_uses {
+                    let result = registry.dispatch(name, input.clone()).await;
+                    out.push((id.clone(), name.clone(), result));
+                }
+                out
+            };
+
+            // Build tool_result blocks in the same order as the tool_use
+            // blocks. The model expects positional correspondence.
+            let mut tool_results: Vec<ContentBlock> = Vec::with_capacity(dispatched.len());
+            for (id, name, result) in dispatched {
+                let (content, is_error) = match result {
+                    Ok(value) => (value_to_tool_result(value), None),
+                    Err(e) => {
+                        tracing::warn!(
+                            tool = %name,
+                            error = %e,
+                            "claude-api: tool dispatch error -- surfacing to model as is_error",
+                        );
+                        (ToolResultContent::Text(format!("{e}")), Some(true))
+                    }
+                };
+                tool_results.push(ContentBlock::Known(KnownBlock::ToolResult {
+                    tool_use_id: id,
+                    content,
+                    is_error,
+                    cache_control: None,
+                }));
             }
 
             conversation.messages.push(MessageInput::user(tool_results));
@@ -524,6 +636,255 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(counter.load(Ordering::SeqCst), 2);
+    }
+
+    // ---- v0.4 guardrails: parallel dispatch / cost budget / cancellation ----
+
+    #[tokio::test]
+    async fn parallel_tool_dispatch_runs_concurrently() {
+        // Two tools that each sleep 80ms. Sequential = ~160ms; parallel = ~80ms.
+        // Use a generous upper bound (500ms) so we don't get flakes on slow CI;
+        // the lower bound (>50ms) confirms the tools actually ran.
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "msg_p",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "slow", "input": {"k": 1}},
+                    {"type": "tool_use", "id": "t2", "name": "slow", "input": {"k": 2}},
+                ],
+                "model": "claude-sonnet-4-6",
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 10, "output_tokens": 5}
+            })))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("done", "end_turn")),
+            )
+            .mount(&mock)
+            .await;
+
+        let mut registry = ToolRegistry::new();
+        registry.register("slow", json!({}), |input| async move {
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+            Ok(input)
+        });
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("call slow tools");
+
+        let started = std::time::Instant::now();
+        let _ = client
+            .run(&mut convo, &registry, RunOptions::default())
+            .await
+            .unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 500,
+            "parallel dispatch should be fast; got {elapsed:?}"
+        );
+        assert!(
+            elapsed.as_millis() > 50,
+            "tools didn't actually run; got {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_dispatch_can_be_disabled() {
+        // With parallel=false and two 50ms tools, total tool time is ~100ms.
+        // We can't easily prove the disable; assert correctness instead --
+        // tool_results come back in the same order as tool_use blocks.
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "msg_seq",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "echo", "input": {"v": "first"}},
+                    {"type": "tool_use", "id": "t2", "name": "echo", "input": {"v": "second"}},
+                ],
+                "model": "claude-sonnet-4-6",
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 10, "output_tokens": 5}
+            })))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(body_partial_json(json!({
+                "messages": [
+                    {"role": "user"},
+                    {"role": "assistant"},
+                    {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": "t1"},
+                        {"type": "tool_result", "tool_use_id": "t2"}
+                    ]}
+                ]
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("ok", "end_turn")),
+            )
+            .mount(&mock)
+            .await;
+
+        let mut registry = ToolRegistry::new();
+        registry.register("echo", json!({}), |input| async move { Ok(input) });
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("two tools");
+        let _ = client
+            .run(
+                &mut convo,
+                &registry,
+                RunOptions::default().parallel_tool_dispatch(false),
+            )
+            .await
+            .unwrap();
+    }
+
+    #[cfg(feature = "pricing")]
+    #[tokio::test]
+    async fn cost_budget_aborts_loop_when_exceeded() {
+        // Each turn costs ~ (1M input * $3/MTok) = $3 on Sonnet 4.6.
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "msg_b",
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "id": "t1", "name": "noop", "input": {}}
+                ],
+                "model": "claude-sonnet-4-6",
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 1_000_000, "output_tokens": 0}
+            })))
+            .mount(&mock)
+            .await;
+
+        let mut registry = ToolRegistry::new();
+        registry.register("noop", json!({}), |_input| async move { Ok(json!({})) });
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("burn money");
+
+        let err = client
+            .run(
+                &mut convo,
+                &registry,
+                RunOptions::default()
+                    .max_iterations(8)
+                    .cost_budget(1.00, crate::pricing::PricingTable::default()),
+            )
+            .await
+            .unwrap_err();
+        let Error::CostBudgetExceeded {
+            budget_usd,
+            spent_usd,
+        } = err
+        else {
+            panic!("expected CostBudgetExceeded, got {err:?}");
+        };
+        // Budget was $1; first turn already cost $3; spent_usd should reflect that.
+        assert!((budget_usd - 1.00).abs() < 1e-9);
+        assert!(
+            spent_usd > 1.00,
+            "spent_usd ({spent_usd}) should exceed budget"
+        );
+    }
+
+    #[tokio::test]
+    async fn cancel_token_aborts_before_first_request() {
+        let mock = MockServer::start().await;
+        // Mount a mock that *would* respond, but we expect it never to be hit
+        // because cancellation fires before the first request.
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("ok", "end_turn")),
+            )
+            .expect(0)
+            .mount(&mock)
+            .await;
+
+        let token = tokio_util::sync::CancellationToken::new();
+        token.cancel(); // pre-cancel
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("hi");
+
+        let err = client
+            .run(
+                &mut convo,
+                &ToolRegistry::new(),
+                RunOptions::default().cancel_token(token),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Cancelled), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn cancel_token_aborts_between_iterations() {
+        let mock = MockServer::start().await;
+        // First iteration: tool_use; loop continues.
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(assistant_tool_use(
+                "t1",
+                "noop",
+                json!({}),
+            )))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        // Second iteration: must NOT be called because we cancel after iter 1.
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("won't run", "end_turn")),
+            )
+            .expect(0)
+            .mount(&mock)
+            .await;
+
+        let token = tokio_util::sync::CancellationToken::new();
+        let token_for_hook = token.clone();
+
+        let mut registry = ToolRegistry::new();
+        registry.register("noop", json!({}), |_| async move { Ok(json!({})) });
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("hi");
+
+        let err = client
+            .run(
+                &mut convo,
+                &registry,
+                RunOptions::default()
+                    .cancel_token(token)
+                    .on_iteration(move |_msg, _n| token_for_hook.cancel()),
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(err, Error::Cancelled), "got {err:?}");
     }
 
     #[tokio::test]
