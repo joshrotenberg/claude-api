@@ -1,4 +1,56 @@
-//! The Messages API: `create`, `create_stream`, `count_tokens`.
+//! The Messages API.
+//!
+//! The headline endpoint of the Anthropic API. Build a request via
+//! [`CreateMessageRequest::builder`], then send it through the
+//! [`Messages`] namespace handle obtained from
+//! [`Client::messages`](crate::Client::messages).
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Function |
+//! |---|---|---|
+//! | `POST` | `/v1/messages` | [`Messages::create`] (non-streaming) |
+//! | `POST` | `/v1/messages` | [`Messages::create_stream`] (SSE) |
+//! | `POST` | `/v1/messages/count_tokens` | [`Messages::count_tokens`] |
+//!
+//! # Quick start
+//!
+//! ```no_run
+//! use claude_api::{Client, messages::CreateMessageRequest, types::ModelId};
+//! # async fn run() -> Result<(), claude_api::Error> {
+//! let client = Client::new("sk-ant-...");
+//! let resp = client.messages().create(
+//!     CreateMessageRequest::builder()
+//!         .model(ModelId::SONNET_4_6)
+//!         .max_tokens(256)
+//!         .system("Be concise.")
+//!         .user("What is the capital of France?")
+//!         .build()?,
+//! ).await?;
+//! # Ok(()) }
+//! ```
+//!
+//! # Module layout
+//!
+//! - [`request`] -- [`CreateMessageRequest`], [`CountTokensRequest`],
+//!   builders
+//! - [`response`] -- [`Message`], [`CountTokensResponse`],
+//!   [`ContainerInfo`]
+//! - [`content`] -- [`ContentBlock`] / [`KnownBlock`] union with
+//!   forward-compat fallthrough
+//! - [`stream`] -- [`StreamEvent`], [`ContentDelta`], the
+//!   `EventStream` aggregator + `on_*` callbacks
+//! - [`tools`] -- [`Tool`], [`BuiltinTool`], [`CustomTool`],
+//!   [`ToolChoice`]
+//! - [`cache`] -- [`CacheControl`] for prompt caching
+//! - [`thinking`] -- [`ThinkingConfig`] for extended thinking
+//! - [`mcp`] -- [`McpServerConfig`] for MCP server invocation
+//! - [`citation`] -- typed [`Citation`] enum
+//! - [`input`] -- [`MessageInput`], [`SystemPrompt`] helpers
+//! - [`metadata`] -- [`MessageMetadata`], [`RequestServiceTier`]
+//!
+//! For streaming, see [`stream`] for the wire-event types and
+//! [`api::Messages::create_stream`] for the namespace method.
 
 pub mod cache;
 pub mod citation;

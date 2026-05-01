@@ -1,4 +1,54 @@
 //! Error type, result alias, and wire-format error payload.
+//!
+//! Every endpoint method returns [`Result<T>`](Result) where the
+//! error variant is [`Error`]. The error carries:
+//!
+//! - **HTTP status** (when the API responded with one) via
+//!   [`Error::status`]
+//! - **`request-id`** (always populated when the server sent one)
+//!   via [`Error::request_id`] -- this is the field to include in
+//!   support tickets
+//! - **Retry classification** via [`Error::is_retryable`] -- the
+//!   [`retry::RetryPolicy`](crate::retry::RetryPolicy) layer uses
+//!   the same logic
+//! - **`Retry-After` honoring** via [`Error::retry_after`] -- the
+//!   parsed `Retry-After` header (in seconds), used by the retry
+//!   layer to wait before the next attempt
+//! - **Structured kind** via [`ApiErrorKind`] for documented API
+//!   error types (rate-limit, authentication, not-found, etc.)
+//!
+//! # Quick start
+//!
+//! ```no_run
+//! use claude_api::{Client, messages::CreateMessageRequest, types::ModelId};
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let client = Client::new("sk-ant-...");
+//! let req = CreateMessageRequest::builder()
+//!     .model(ModelId::SONNET_4_6)
+//!     .max_tokens(8)
+//!     .user("hi")
+//!     .build()?;
+//!
+//! match client.messages().create(req).await {
+//!     Ok(resp) => println!("ok: {}", resp.id),
+//!     Err(e) if e.is_retryable() => {
+//!         // The retry layer already retried; if we're here, attempts
+//!         // were exhausted.
+//!         eprintln!("gave up after retries: {} (request_id={:?})",
+//!                   e, e.request_id());
+//!     }
+//!     Err(e) => {
+//!         // Permanent error -- 4xx, deserialization, signing, etc.
+//!         eprintln!("error: {} (request_id={:?})",
+//!                   e, e.request_id());
+//!     }
+//! }
+//! # Ok(()) }
+//! ```
+//!
+//! Variants tied to optional features (`async`/`sync` for
+//! [`Error::Network`], `streaming` for [`Error::Stream`]) are
+//! conditionally compiled out when those features are disabled.
 
 use std::time::Duration;
 
