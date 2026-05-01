@@ -87,6 +87,15 @@ loop.
   preserved as raw JSON via an `Other(Value)` arm rather than breaking
   older SDK versions. New `type` tags round-trip byte-for-byte. No other
   Rust crate (and no official SDK in any language) does this.
+
+  **Upgrade contract**: when a server-side `type` tag that previously
+  fell through to `Other` becomes a recognized `Known` variant in a new
+  release, that's a **minor** version bump. Code that pattern-matched
+  on `Other(v) if v["type"] == "thinking"` will silently stop matching
+  -- the value now arrives as `Known(KnownBlock::Thinking { .. })`.
+  When you bump claude-api, sweep your `Other` matches and route the
+  newly-known variants explicitly. Releases that promote variants will
+  call them out in the changelog.
 - **`Retry-After` honored.** Most existing Rust crates for the Anthropic
   API ignore the header. This one respects it, with configurable
   `RetryPolicy { max_attempts, initial_backoff, max_backoff, jitter,

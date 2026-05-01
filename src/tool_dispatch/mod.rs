@@ -26,7 +26,7 @@ pub mod runner;
 pub mod typed;
 
 pub use registry::{FnTool, ToolRegistry};
-pub use tool::{Tool, ToolError};
+pub use tool::{fn_approver, ApprovalDecision, Tool, ToolApprover, ToolError};
 
 #[cfg(feature = "conversation")]
 pub use runner::RunOptions;

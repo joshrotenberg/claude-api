@@ -44,6 +44,7 @@ pub struct RunOptions {
     #[cfg(feature = "pricing")]
     cost_budget: Option<CostBudget>,
     cancel_token: Option<tokio_util::sync::CancellationToken>,
+    approver: Option<std::sync::Arc<dyn crate::tool_dispatch::ToolApprover>>,
 }
 
 impl Default for RunOptions {
@@ -55,6 +56,7 @@ impl Default for RunOptions {
             #[cfg(feature = "pricing")]
             cost_budget: None,
             cancel_token: None,
+            approver: None,
         }
     }
 }
@@ -116,6 +118,30 @@ impl RunOptions {
         self
     }
 
+    /// Attach a [`ToolApprover`](crate::tool_dispatch::ToolApprover).
+    /// Consulted before every tool dispatch; the verdict can approve,
+    /// approve with rewritten input, substitute a result, deny (with a
+    /// reason surfaced to the model as `is_error = true`), or stop the
+    /// entire loop with [`Error::ToolApprovalStopped`].
+    #[must_use]
+    pub fn with_approver(
+        mut self,
+        approver: std::sync::Arc<dyn crate::tool_dispatch::ToolApprover>,
+    ) -> Self {
+        self.approver = Some(approver);
+        self
+    }
+
+    /// Closure-based shortcut for [`Self::with_approver`].
+    #[must_use]
+    pub fn with_approver_fn<F, Fut>(self, handler: F) -> Self
+    where
+        F: Fn(&str, &serde_json::Value) -> Fut + Send + Sync + 'static,
+        Fut: std::future::Future<Output = crate::tool_dispatch::ApprovalDecision> + Send + 'static,
+    {
+        self.with_approver(crate::tool_dispatch::fn_approver(handler))
+    }
+
     /// Borrow the configured iteration cap.
     #[must_use]
     pub fn max_iterations_value(&self) -> u32 {
@@ -132,7 +158,8 @@ impl fmt::Debug for RunOptions {
                 &self.on_iteration.as_ref().map(|_| "<closure>"),
             )
             .field("parallel_tool_dispatch", &self.parallel_tool_dispatch)
-            .field("cancel_token", &self.cancel_token.is_some());
+            .field("cancel_token", &self.cancel_token.is_some())
+            .field("approver", &self.approver.as_ref().map(|_| "<approver>"));
         #[cfg(feature = "pricing")]
         s.field("cost_budget", &self.cost_budget.as_ref().map(|b| b.max_usd));
         s.finish()
@@ -160,6 +187,7 @@ impl Client {
     /// execution errors do *not* propagate; they are surfaced back to
     /// the model as `is_error = true` tool results so it can recover.
     #[allow(clippy::too_many_lines)] // cohesive control flow; splitting hurts readability
+    #[allow(clippy::missing_panics_doc)] // internal expect() is unreachable by construction
     pub async fn run(
         &self,
         conversation: &mut Conversation,
@@ -244,40 +272,139 @@ impl Client {
                 return Ok(response);
             }
 
-            // Dispatch -- in parallel by default, sequentially on request.
-            let dispatched = if options.parallel_tool_dispatch {
-                let futures = tool_uses.iter().map(|(id, name, input)| {
-                    let id = id.clone();
-                    let name = name.clone();
-                    let input = input.clone();
-                    async move {
-                        let result = registry.dispatch(&name, input).await;
-                        (id, name, result)
+            // Approval gate: consult the approver (if any) for each
+            // tool_use *before* dispatching. The approver may approve
+            // as-is, rewrite the input, substitute a canned result, deny
+            // with a reason (surfaced as `is_error = true`), or stop the
+            // entire loop.
+            //
+            // Approvers are awaited sequentially. They are expected to
+            // be lightweight (allowlist check, UI prompt). If a user
+            // wants concurrent approval they can spawn within the
+            // approver itself.
+            let mut plans: Vec<DispatchPlan> = Vec::with_capacity(tool_uses.len());
+            for (id, name, input) in &tool_uses {
+                let plan = if let Some(approver) = &options.approver {
+                    match approver.approve(name, input).await {
+                        crate::tool_dispatch::ApprovalDecision::Approve => DispatchPlan::Run {
+                            id: id.clone(),
+                            name: name.clone(),
+                            input: input.clone(),
+                        },
+                        crate::tool_dispatch::ApprovalDecision::ApproveWithInput(new_input) => {
+                            tracing::debug!(
+                                tool = %name,
+                                "claude-api: approver rewrote tool input"
+                            );
+                            DispatchPlan::Run {
+                                id: id.clone(),
+                                name: name.clone(),
+                                input: new_input,
+                            }
+                        }
+                        crate::tool_dispatch::ApprovalDecision::Substitute(value) => {
+                            tracing::debug!(
+                                tool = %name,
+                                "claude-api: approver substituted result without dispatch"
+                            );
+                            DispatchPlan::ResultDirect {
+                                id: id.clone(),
+                                content: value_to_tool_result(value),
+                                is_error: None,
+                            }
+                        }
+                        crate::tool_dispatch::ApprovalDecision::Deny(reason) => {
+                            tracing::info!(
+                                tool = %name,
+                                reason = %reason,
+                                "claude-api: approver denied tool dispatch"
+                            );
+                            DispatchPlan::ResultDirect {
+                                id: id.clone(),
+                                content: ToolResultContent::Text(reason),
+                                is_error: Some(true),
+                            }
+                        }
+                        crate::tool_dispatch::ApprovalDecision::Stop(reason) => {
+                            tracing::warn!(
+                                tool = %name,
+                                reason = %reason,
+                                "claude-api: approver stopped the agent loop"
+                            );
+                            return Err(Error::ToolApprovalStopped {
+                                tool_name: name.clone(),
+                                reason,
+                            });
+                        }
                     }
-                });
-                futures_util::future::join_all(futures).await
-            } else {
-                let mut out = Vec::with_capacity(tool_uses.len());
-                for (id, name, input) in &tool_uses {
-                    let result = registry.dispatch(name, input.clone()).await;
-                    out.push((id.clone(), name.clone(), result));
-                }
-                out
-            };
+                } else {
+                    DispatchPlan::Run {
+                        id: id.clone(),
+                        name: name.clone(),
+                        input: input.clone(),
+                    }
+                };
+                plans.push(plan);
+            }
 
-            // Build tool_result blocks in the same order as the tool_use
-            // blocks. The model expects positional correspondence.
-            let mut tool_results: Vec<ContentBlock> = Vec::with_capacity(dispatched.len());
-            for (id, name, result) in dispatched {
-                let (content, is_error) = match result {
-                    Ok(value) => (value_to_tool_result(value), None),
-                    Err(e) => {
-                        tracing::warn!(
-                            tool = %name,
-                            error = %e,
-                            "claude-api: tool dispatch error -- surfacing to model as is_error",
-                        );
-                        (ToolResultContent::Text(format!("{e}")), Some(true))
+            // Dispatch the Run plans -- in parallel by default,
+            // sequentially on request. Substitute/Deny plans are filled
+            // in directly without dispatch.
+            let dispatched: Vec<(String, String, Result<serde_json::Value, _>)> =
+                if options.parallel_tool_dispatch {
+                    let futures = plans
+                        .iter()
+                        .filter_map(|p| {
+                            if let DispatchPlan::Run { id, name, input } = p {
+                                Some((id.clone(), name.clone(), input.clone()))
+                            } else {
+                                None
+                            }
+                        })
+                        .map(|(id, name, input)| async move {
+                            let result = registry.dispatch(&name, input).await;
+                            (id, name, result)
+                        });
+                    futures_util::future::join_all(futures).await
+                } else {
+                    let mut out = Vec::new();
+                    for p in &plans {
+                        if let DispatchPlan::Run { id, name, input } = p {
+                            let result = registry.dispatch(name, input.clone()).await;
+                            out.push((id.clone(), name.clone(), result));
+                        }
+                    }
+                    out
+                };
+
+            // Stitch dispatched results back into the original order,
+            // preserving Substitute/Deny short-circuits.
+            let mut dispatched_iter = dispatched.into_iter();
+            let mut tool_results: Vec<ContentBlock> = Vec::with_capacity(plans.len());
+            for plan in plans {
+                let (id, content, is_error) = match plan {
+                    DispatchPlan::ResultDirect {
+                        id,
+                        content,
+                        is_error,
+                    } => (id, content, is_error),
+                    DispatchPlan::Run { .. } => {
+                        // Safe: dispatched contains exactly one entry per
+                        // Run plan, in the same order as the plans Vec.
+                        let (id, name, result) = dispatched_iter
+                            .next()
+                            .expect("dispatched/plans length mismatch");
+                        match result {
+                            Ok(value) => (id, value_to_tool_result(value), None),
+                            Err(e) => {
+                                tracing::warn!(
+                                    tool = %name,
+                                    error = %e,
+                                    "claude-api: tool dispatch error -- surfacing to model as is_error",
+                                );
+                                (id, ToolResultContent::Text(format!("{e}")), Some(true))
+                            }
+                        }
                     }
                 };
                 tool_results.push(ContentBlock::Known(KnownBlock::ToolResult {
@@ -297,6 +424,22 @@ impl Client {
     }
 }
 
+/// Internal: per-`tool_use` decision derived from the optional approver.
+/// Drives whether `Client::run` dispatches through the registry or
+/// short-circuits with a synthesized result.
+enum DispatchPlan {
+    Run {
+        id: String,
+        name: String,
+        input: serde_json::Value,
+    },
+    ResultDirect {
+        id: String,
+        content: ToolResultContent,
+        is_error: Option<bool>,
+    },
+}
+
 fn value_to_tool_result(value: serde_json::Value) -> ToolResultContent {
     // String results pass through cleanly; everything else gets serialized
     // back to a string (the model is comfortable with JSON-as-text).
@@ -312,6 +455,7 @@ mod tests {
     use crate::conversation::Conversation;
     use crate::messages::tools::Tool as MessagesTool;
     use crate::tool_dispatch::tool::ToolError;
+    use crate::tool_dispatch::ApprovalDecision;
     use crate::types::ModelId;
     use pretty_assertions::assert_eq;
     use serde_json::{json, Value};
@@ -885,6 +1029,282 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Cancelled), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn approver_approve_passes_through_to_dispatch() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(assistant_tool_use(
+                "toolu_1",
+                "echo",
+                json!({"text": "hi"}),
+            )))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(body_partial_json(json!({
+                "messages": [
+                    {"role": "user", "content": "go"},
+                    {"role": "assistant"},
+                    {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "{\"text\":\"hi\"}"}
+                    ]}
+                ]
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("done", "end_turn")),
+            )
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("go");
+
+        let opts = RunOptions::default()
+            .with_approver_fn(|_name, _input| async { ApprovalDecision::Approve });
+        let resp = client
+            .run(&mut convo, &echo_registry(), opts)
+            .await
+            .unwrap();
+        assert_eq!(resp.stop_reason, Some(StopReason::EndTurn));
+    }
+
+    #[tokio::test]
+    async fn approver_approve_with_input_rewrites_dispatch_payload() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(assistant_tool_use(
+                "toolu_1",
+                "echo",
+                json!({"text": "secret"}),
+            )))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        // Tool result should reflect the *rewritten* input, not the model's original.
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(body_partial_json(json!({
+                "messages": [
+                    {"role": "user", "content": "go"},
+                    {"role": "assistant"},
+                    {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "{\"text\":\"REDACTED\"}"}
+                    ]}
+                ]
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("ok", "end_turn")),
+            )
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("go");
+
+        let opts = RunOptions::default().with_approver_fn(|_name, _input| async {
+            ApprovalDecision::ApproveWithInput(json!({"text": "REDACTED"}))
+        });
+        client
+            .run(&mut convo, &echo_registry(), opts)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn approver_substitute_skips_dispatch_and_returns_value() {
+        // Tool registry that would panic if invoked. Substitute should skip it.
+        let mut registry = ToolRegistry::new();
+        registry.register("dangerous", json!({}), |_| async {
+            panic!("dispatch should have been skipped by Substitute")
+        });
+
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(assistant_tool_use(
+                "toolu_1",
+                "dangerous",
+                json!({"arg": 1}),
+            )))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(body_partial_json(json!({
+                "messages": [
+                    {"role": "user", "content": "go"},
+                    {"role": "assistant"},
+                    {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "stubbed"}
+                    ]}
+                ]
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("ok", "end_turn")),
+            )
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("go");
+
+        let opts = RunOptions::default().with_approver_fn(|_name, _input| async {
+            ApprovalDecision::Substitute(json!("stubbed"))
+        });
+        client.run(&mut convo, &registry, opts).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn approver_deny_returns_is_error_tool_result_and_loop_continues() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(assistant_tool_use(
+                "toolu_1",
+                "echo",
+                json!({"text": "hi"}),
+            )))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .and(body_partial_json(json!({
+                "messages": [
+                    {"role": "user", "content": "go"},
+                    {"role": "assistant"},
+                    {"role": "user", "content": [
+                        {"type": "tool_result", "tool_use_id": "toolu_1", "content": "policy violation: no echo today", "is_error": true}
+                    ]}
+                ]
+            })))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("ack", "end_turn")),
+            )
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("go");
+
+        let opts = RunOptions::default().with_approver_fn(|_name, _input| async {
+            ApprovalDecision::Deny("policy violation: no echo today".into())
+        });
+        let resp = client
+            .run(&mut convo, &echo_registry(), opts)
+            .await
+            .unwrap();
+        assert_eq!(resp.stop_reason, Some(StopReason::EndTurn));
+    }
+
+    #[tokio::test]
+    async fn approver_stop_aborts_loop_with_typed_error() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(assistant_tool_use(
+                "toolu_1",
+                "echo",
+                json!({"text": "hi"}),
+            )))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("go");
+
+        let opts = RunOptions::default().with_approver_fn(|_name, _input| async {
+            ApprovalDecision::Stop("user cancelled".into())
+        });
+        let err = client
+            .run(&mut convo, &echo_registry(), opts)
+            .await
+            .unwrap_err();
+        match err {
+            Error::ToolApprovalStopped { tool_name, reason } => {
+                assert_eq!(tool_name, "echo");
+                assert_eq!(reason, "user cancelled");
+            }
+            other => panic!("expected ToolApprovalStopped, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn approver_per_call_decision_can_mix_approve_and_deny() {
+        // Two parallel tool_use blocks in one turn; approve one, deny the other.
+        let mock = MockServer::start().await;
+        let dual_tool_use = json!({
+            "id": "msg_t",
+            "type": "message",
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "toolu_1", "name": "echo", "input": {"text": "ok"}},
+                {"type": "tool_use", "id": "toolu_2", "name": "echo", "input": {"text": "block"}},
+            ],
+            "model": "claude-sonnet-4-6",
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 5}
+        });
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(dual_tool_use))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("done", "end_turn")),
+            )
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("go");
+
+        let opts = RunOptions::default().with_approver_fn(|_name, input| {
+            let blocked = input.get("text").and_then(Value::as_str) == Some("block");
+            async move {
+                if blocked {
+                    ApprovalDecision::Deny("blocked".into())
+                } else {
+                    ApprovalDecision::Approve
+                }
+            }
+        });
+        client
+            .run(&mut convo, &echo_registry(), opts)
+            .await
+            .unwrap();
+
+        // Inspect the user tool_result turn (index 2: user / assistant /
+        // user-tool_results / assistant-final). It should carry two
+        // tool_result blocks, one normal + one with is_error: true.
+        let tool_result_turn = &convo.messages[2];
+        let serialized = serde_json::to_value(tool_result_turn).unwrap();
+        let blocks = serialized
+            .get("content")
+            .and_then(Value::as_array)
+            .expect("content array");
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0]["tool_use_id"], "toolu_1");
+        assert!(blocks[0].get("is_error").is_none());
+        assert_eq!(blocks[1]["tool_use_id"], "toolu_2");
+        assert_eq!(blocks[1]["is_error"], true);
+        assert_eq!(blocks[1]["content"], "blocked");
     }
 
     #[tokio::test]

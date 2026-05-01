@@ -117,6 +117,70 @@ impl ToolError {
     }
 }
 
+/// Verdict from a [`ToolApprover`] for a single `tool_use` invocation.
+///
+/// Approvers are consulted by [`crate::Client::run`] *before* each tool
+/// dispatch, so users can gate side-effecting tools behind an interactive
+/// confirmation, a policy check, an input rewriter, or a static
+/// allowlist.
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum ApprovalDecision {
+    /// Proceed with the tool dispatch unchanged.
+    Approve,
+    /// Proceed, but substitute a different `input` (the model's original
+    /// payload is discarded). Useful for sanitizing arguments before the
+    /// tool runs (path scrubbing, scope clamping, etc.).
+    ApproveWithInput(serde_json::Value),
+    /// Skip the tool dispatch entirely and return `value` as the
+    /// `tool_result` content (with no `is_error` flag). Useful for
+    /// stubbing tools in tests or short-circuiting expensive calls when
+    /// the answer is already known.
+    Substitute(serde_json::Value),
+    /// Skip the tool dispatch. The supplied `reason` is returned to the
+    /// model as the `tool_result` content (with `is_error = true`) so
+    /// the model can choose how to recover.
+    Deny(String),
+    /// Abort the entire agent loop. Surfaces as
+    /// [`crate::Error::ToolApprovalStopped`] from `Client::run`.
+    Stop(String),
+}
+
+/// Async-callable predicate consulted before each tool dispatch.
+///
+/// Implement this trait for stateful approvers, or use the closure
+/// adapter [`fn_approver`] / [`RunOptions::with_approver_fn`].
+#[async_trait]
+pub trait ToolApprover: Send + Sync + 'static {
+    /// Inspect a pending tool dispatch and return a verdict.
+    async fn approve(&self, tool_name: &str, input: &serde_json::Value) -> ApprovalDecision;
+}
+
+/// Wrap an async closure into a [`ToolApprover`].
+#[must_use]
+pub fn fn_approver<F, Fut>(handler: F) -> std::sync::Arc<dyn ToolApprover>
+where
+    F: Fn(&str, &serde_json::Value) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = ApprovalDecision> + Send + 'static,
+{
+    std::sync::Arc::new(FnApprover { handler })
+}
+
+struct FnApprover<F> {
+    handler: F,
+}
+
+#[async_trait]
+impl<F, Fut> ToolApprover for FnApprover<F>
+where
+    F: Fn(&str, &serde_json::Value) -> Fut + Send + Sync + 'static,
+    Fut: std::future::Future<Output = ApprovalDecision> + Send + 'static,
+{
+    async fn approve(&self, tool_name: &str, input: &serde_json::Value) -> ApprovalDecision {
+        (self.handler)(tool_name, input).await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

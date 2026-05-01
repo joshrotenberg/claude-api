@@ -1,0 +1,30 @@
+# Bundled per-model pricing rates baked into PricingTable::default().
+#
+# Updates: edit the relevant [[models]] entry. The `build.rs` script reads
+# this file and emits Rust source at compile time; no runtime parsing.
+#
+# Rates are USD per million tokens unless noted. Cache rates default to
+# the standard Anthropic multipliers (5m = 1.25x input, 1h = 2x input,
+# read = 0.1x input) when omitted -- override by setting the explicit
+# `cache_creation_5m_per_mtok` / `cache_creation_1h_per_mtok` /
+# `cache_read_per_mtok` fields. `web_search_per_request` is per-call USD.
+#
+# Anthropic adjusts pricing periodically; PRs welcome.
+
+[[models]]
+id = "claude-opus-4-7"
+input_per_mtok = 15.00
+output_per_mtok = 75.00
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-sonnet-4-6"
+input_per_mtok = 3.00
+output_per_mtok = 15.00
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-haiku-4-5-20251001"
+input_per_mtok = 1.00
+output_per_mtok = 5.00
+web_search_per_request = 0.01

@@ -151,6 +151,59 @@ impl<'a> Messages<'a> {
         })
     }
 
+    /// Like [`Self::cost_preview`] but consults a
+    /// [`CountTokensCache`](crate::cost_preview::CountTokensCache)
+    /// before issuing the network call. Cache hits avoid the
+    /// `count_tokens` round-trip entirely. Useful for IDE integrations
+    /// and long-running agents that preview the same prompt many times.
+    #[cfg(feature = "pricing")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "pricing")))]
+    pub async fn cost_preview_cached(
+        &self,
+        request: &CreateMessageRequest,
+        pricing: &crate::pricing::PricingTable,
+        cache: &crate::cost_preview::CountTokensCache,
+    ) -> Result<crate::cost_preview::CostPreview> {
+        use crate::types::Usage;
+        let count_req = CountTokensRequest::from(request);
+        let key = crate::cost_preview::hash_request(&count_req);
+
+        let input_tokens = if let Some(cached) = cache.get(key) {
+            cached
+        } else {
+            let count = self.count_tokens(count_req).await?;
+            cache.put(key, count.input_tokens);
+            count.input_tokens
+        };
+
+        let max_output_tokens = request.max_tokens;
+        let input_cost_usd = pricing.cost(
+            &request.model,
+            &Usage {
+                input_tokens,
+                output_tokens: 0,
+                ..Usage::default()
+            },
+        );
+        let max_total_usd = pricing.cost(
+            &request.model,
+            &Usage {
+                input_tokens,
+                output_tokens: max_output_tokens,
+                ..Usage::default()
+            },
+        );
+        let max_output_cost_usd = max_total_usd - input_cost_usd;
+        Ok(crate::cost_preview::CostPreview {
+            model: request.model.clone(),
+            input_tokens,
+            max_output_tokens,
+            input_cost_usd,
+            max_output_cost_usd,
+            max_total_usd,
+        })
+    }
+
     /// Render the HTTP request that [`Self::count_tokens`] would send.
     pub fn dry_run_count_tokens(&self, request: &CountTokensRequest) -> Result<DryRun> {
         self.dry_run_count_tokens_with_beta(request, &[])
@@ -487,6 +540,98 @@ mod tests {
         // 1000 input + 500 output: $0.003 + $0.0075 = $0.0105
         let estimate = preview.cost_for(500, &pricing);
         assert!((estimate - 0.0105).abs() < 1e-9);
+    }
+
+    #[cfg(feature = "pricing")]
+    #[tokio::test]
+    async fn cost_preview_cached_skips_network_on_hit() {
+        let mock = MockServer::start().await;
+        // Mount with .expect(1): test fails if more than one count_tokens
+        // call happens, which is exactly the regression we want to catch.
+        Mock::given(method("POST"))
+            .and(path("/v1/messages/count_tokens"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"input_tokens": 42})))
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(64)
+            .user("hi")
+            .build()
+            .unwrap();
+        let pricing = crate::pricing::PricingTable::default();
+        let cache = crate::cost_preview::CountTokensCache::new(8);
+
+        let p1 = client
+            .messages()
+            .cost_preview_cached(&req, &pricing, &cache)
+            .await
+            .unwrap();
+        let p2 = client
+            .messages()
+            .cost_preview_cached(&req, &pricing, &cache)
+            .await
+            .unwrap();
+
+        assert_eq!(p1, p2);
+        assert_eq!(cache.len(), 1);
+    }
+
+    #[cfg(feature = "pricing")]
+    #[tokio::test]
+    async fn cost_preview_cached_distinguishes_different_requests() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages/count_tokens"))
+            .and(body_partial_json(
+                json!({"messages": [{"role": "user", "content": "alpha"}]}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"input_tokens": 100})))
+            .mount(&mock)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages/count_tokens"))
+            .and(body_partial_json(
+                json!({"messages": [{"role": "user", "content": "beta"}]}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"input_tokens": 200})))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let pricing = crate::pricing::PricingTable::default();
+        let cache = crate::cost_preview::CountTokensCache::new(8);
+
+        let req_a = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(64)
+            .user("alpha")
+            .build()
+            .unwrap();
+        let req_b = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(64)
+            .user("beta")
+            .build()
+            .unwrap();
+
+        let pa = client
+            .messages()
+            .cost_preview_cached(&req_a, &pricing, &cache)
+            .await
+            .unwrap();
+        let pb = client
+            .messages()
+            .cost_preview_cached(&req_b, &pricing, &cache)
+            .await
+            .unwrap();
+
+        assert_eq!(pa.input_tokens, 100);
+        assert_eq!(pb.input_tokens, 200);
+        assert_eq!(cache.len(), 2);
     }
 
     #[test]

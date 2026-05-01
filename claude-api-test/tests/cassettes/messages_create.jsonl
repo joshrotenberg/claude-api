@@ -1,0 +1,2 @@
+# Sample cassette: a minimal POST /v1/messages exchange.
+{"method":"POST","path":"/v1/messages","status":200,"response":{"id":"msg_replay","type":"message","role":"assistant","content":[{"type":"text","text":"Hello from cassette"}],"model":"claude-sonnet-4-6","stop_reason":"end_turn","usage":{"input_tokens":5,"output_tokens":4}},"headers":[["request-id","req_replay_001"]]}

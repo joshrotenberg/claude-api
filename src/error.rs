@@ -71,6 +71,15 @@ pub enum Error {
     /// A cancellation token signaled abort between iterations.
     #[error("agent loop cancelled")]
     Cancelled,
+    /// A `ToolApprover` returned `ApprovalDecision::Stop`, ending the loop
+    /// before the named tool could run.
+    #[error("agent loop stopped by approval gate at tool '{tool_name}': {reason}")]
+    ToolApprovalStopped {
+        /// Name of the tool whose approval check returned `Stop`.
+        tool_name: String,
+        /// Reason supplied by the approver.
+        reason: String,
+    },
 }
 
 impl Error {
@@ -95,7 +104,8 @@ impl Error {
             | Error::Io(_)
             | Error::MaxIterationsExceeded { .. }
             | Error::CostBudgetExceeded { .. }
-            | Error::Cancelled => false,
+            | Error::Cancelled
+            | Error::ToolApprovalStopped { .. } => false,
         }
     }
 
