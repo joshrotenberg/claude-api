@@ -1,4 +1,11 @@
 //! Configuration for extended thinking.
+//!
+//! Pass a [`ThinkingConfig::Enabled`] value in the request to have the model
+//! emit `thinking` blocks before its final answer. `budget_tokens` caps how
+//! much of `max_tokens` the model may spend on reasoning.
+//!
+//! Extended thinking is supported by Claude Sonnet 4.6+ and Claude Opus 4.x.
+//! See [`crate::models::ModelCapabilities`] to check model support at runtime.
 
 use serde::{Deserialize, Serialize};
 

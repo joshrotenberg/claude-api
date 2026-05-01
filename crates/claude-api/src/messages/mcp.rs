@@ -1,4 +1,9 @@
 //! MCP server configuration for the `mcp_servers` request field.
+//!
+//! Pass one or more [`McpServerConfig`] values when constructing a
+//! [`CreateMessageRequest`](crate::messages::request::CreateMessageRequest)
+//! to give the model access to Model Context Protocol tools hosted at
+//! external URLs. The server must speak the MCP protocol over HTTP/SSE.
 
 use serde::{Deserialize, Serialize};
 
