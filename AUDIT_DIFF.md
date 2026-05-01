@@ -10,16 +10,14 @@ Legend: `✓` = exact match. Otherwise the section lists the diff.
 
 ## Summary
 
-21 / 28 pairs match exactly.
+23 / 28 pairs match exactly.
 
 Mismatches or warnings:
 - `src/managed_agents/sessions.rs:Session:BetaManagedAgentsSession`
 - `src/managed_agents/agents.rs:Agent:BetaManagedAgentsAgent`
-- `src/managed_agents/resources.rs:FileResource:BetaManagedAgentsFileResource`
 - `src/managed_agents/resources.rs:GitHubRepositoryResource:BetaManagedAgentsGitHubRepositoryResource`
 - `src/managed_agents/resources.rs:MemoryStoreResource:BetaManagedAgentsMemoryStoreResource`
 - `src/managed_agents/events.rs:AgentToolUseEvent:BetaManagedAgentsAgentToolUseEvent`
-- `src/managed_agents/events.rs:SpanModelRequestEndEvent:BetaManagedAgentsSpanModelRequestEndEvent`
 
 ## Pair-by-pair details
 
@@ -49,35 +47,15 @@ Mismatches or warnings:
 
 ### `MemoryVersion` — `BetaManagedAgentsMemoryVersion`  ✓ (13/13)
 
-### `FileResource` — `BetaManagedAgentsFileResource`  (rust=3, spec=6, shared=3)
+### `FileResource` — `BetaManagedAgentsFileResource`  ✓ (5/5)
 
-**Missing in Rust** (in spec but not in our struct):
-
-- `created_at`
-- `type`
-- `updated_at`
-
-### `GitHubRepositoryResource` — `BetaManagedAgentsGitHubRepositoryResource`  (rust=4, spec=7, shared=3)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `checkout`
-- `created_at`
-- `type`
-- `updated_at`
+### `GitHubRepositoryResource` — `BetaManagedAgentsGitHubRepositoryResource`  (rust=7, spec=6, shared=6)
 
 **Extra in Rust** (in our struct but not in spec):
 
 - `authorization_token`
 
-### `MemoryStoreResource` — `BetaManagedAgentsMemoryStoreResource`  (rust=4, spec=7, shared=3)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `description`
-- `mount_path`
-- `name`
-- `type`
+### `MemoryStoreResource` — `BetaManagedAgentsMemoryStoreResource`  (rust=7, spec=6, shared=6)
 
 **Extra in Rust** (in our struct but not in spec):
 
@@ -105,11 +83,7 @@ Mismatches or warnings:
 
 ### `AgentMessageEvent` — `BetaManagedAgentsAgentMessageEvent`  ✓ (3/3)
 
-### `AgentToolUseEvent` — `BetaManagedAgentsAgentToolUseEvent`  (rust=5, spec=5, shared=4)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `evaluated_permission`
+### `AgentToolUseEvent` — `BetaManagedAgentsAgentToolUseEvent`  (rust=6, spec=5, shared=5)
 
 **Extra in Rust** (in our struct but not in spec):
 
@@ -117,11 +91,7 @@ Mismatches or warnings:
 
 ### `AgentToolResultEvent` — `BetaManagedAgentsAgentToolResultEvent`  ✓ (5/5)
 
-### `SpanModelRequestEndEvent` — `BetaManagedAgentsSpanModelRequestEndEvent`  (rust=4, spec=5, shared=4)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `is_error`
+### `SpanModelRequestEndEvent` — `BetaManagedAgentsSpanModelRequestEndEvent`  ✓ (5/5)
 
 ### `SessionErrorEvent` — `BetaManagedAgentsSessionErrorEvent`  ✓ (3/3)
 

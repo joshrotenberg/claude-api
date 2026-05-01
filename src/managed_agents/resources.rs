@@ -52,6 +52,12 @@ pub struct FileResource {
     /// path for predictable references.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mount_path: Option<String>,
+    /// Creation timestamp (RFC3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Last-modified timestamp (RFC3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 impl FileResource {
@@ -62,6 +68,8 @@ impl FileResource {
             id: None,
             file_id: file_id.into(),
             mount_path: None,
+            created_at: None,
+            updated_at: None,
         }
     }
 
@@ -71,6 +79,24 @@ impl FileResource {
         self.mount_path = Some(path.into());
         self
     }
+}
+
+/// What ref to check out for a [`GitHubRepositoryResource`]. Tagged
+/// union of branch (by name) or commit (by SHA).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum RepositoryCheckout {
+    /// Check out a branch by name.
+    Branch {
+        /// Branch name (e.g. `"main"`).
+        name: String,
+    },
+    /// Check out a specific commit.
+    Commit {
+        /// Full commit SHA.
+        sha: String,
+    },
 }
 
 /// `type: "github_repository"` resource.
@@ -85,11 +111,20 @@ pub struct GitHubRepositoryResource {
     /// Mount path inside the container.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mount_path: Option<String>,
+    /// Branch / commit to check out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub checkout: Option<RepositoryCheckout>,
     /// GitHub access token. **Write-only**: the server stores this
     /// internally and never echoes it on responses, so this field is
     /// always `None` on retrieved resources.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub authorization_token: Option<String>,
+    /// Creation timestamp (RFC3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Last-modified timestamp (RFC3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
 }
 
 impl GitHubRepositoryResource {
@@ -100,8 +135,18 @@ impl GitHubRepositoryResource {
             id: None,
             url: url.into(),
             mount_path: None,
+            checkout: None,
             authorization_token: Some(authorization_token.into()),
+            created_at: None,
+            updated_at: None,
         }
+    }
+
+    /// Set the branch / commit checkout.
+    #[must_use]
+    pub fn checkout(mut self, checkout: RepositoryCheckout) -> Self {
+        self.checkout = Some(checkout);
+        self
     }
 
     /// Set an explicit mount path.
@@ -128,11 +173,23 @@ pub enum MemoryStoreAccess {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct MemoryStoreResource {
-    /// Server-assigned resource ID, present on responses.
+    /// Server-assigned resource ID, present on responses. Note: the
+    /// spec doesn't formally enumerate this field for the memory-store
+    /// variant, but responses include it; preserved for round-trip
+    /// fidelity and for the unified [`SessionResource::id`] accessor.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     /// ID of the memory store to mount.
     pub memory_store_id: String,
+    /// Snapshotted memory-store name (set by the server on responses).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Snapshotted description (set by the server on responses).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Mount path inside the container.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mount_path: Option<String>,
     /// Access mode. Defaults to `read_write` server-side.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub access: Option<MemoryStoreAccess>,
@@ -149,9 +206,19 @@ impl MemoryStoreResource {
         Self {
             id: None,
             memory_store_id: memory_store_id.into(),
+            name: None,
+            description: None,
+            mount_path: None,
             access: None,
             instructions: None,
         }
+    }
+
+    /// Set an explicit mount path.
+    #[must_use]
+    pub fn mount_path(mut self, path: impl Into<String>) -> Self {
+        self.mount_path = Some(path.into());
+        self
     }
 
     /// Set explicit access.

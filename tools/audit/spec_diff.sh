@@ -177,6 +177,10 @@ TAGGED_VARIANTS=(
   "BetaManagedAgentsSessionStatusTerminatedEvent"
   "BetaManagedAgentsSessionDeletedEvent"
   "BetaManagedAgentsSessionErrorEvent"
+  # Resource variants: type is the SessionResource enum tag.
+  "BetaManagedAgentsFileResource"
+  "BetaManagedAgentsGitHubRepositoryResource"
+  "BetaManagedAgentsMemoryStoreResource"
 )
 
 is_tagged_variant() {

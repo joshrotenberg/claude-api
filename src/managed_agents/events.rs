@@ -288,6 +288,22 @@ pub struct AgentThinkingEvent {
     pub signature: Option<String>,
 }
 
+/// Permission verdict the platform applied to a pending tool call.
+/// Returned on [`AgentToolUseEvent`] when the agent's permission
+/// policy includes `ask`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum AgentEvaluatedPermission {
+    /// Tool call may proceed.
+    Allow,
+    /// Tool call requires user confirmation; client must reply with a
+    /// `user.tool_confirmation` event.
+    Ask,
+    /// Tool call is denied.
+    Deny,
+}
+
 /// `agent.tool_use`: agent invokes a pre-built tool.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -302,12 +318,21 @@ pub struct AgentToolUseEvent {
     pub name: String,
     /// Tool input.
     pub input: serde_json::Value,
+    /// Permission verdict the platform applied. `Ask` means the client
+    /// must reply with a `user.tool_confirmation` event before the tool
+    /// runs. `None` when the tool's permission policy is `allow` or the
+    /// field isn't reported.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluated_permission: Option<AgentEvaluatedPermission>,
     /// Set on multi-agent sessions when the request originated in a
     /// sub-agent thread. Echo this on the corresponding
     /// [`OutgoingUserEvent::ToolConfirmation`] or
     /// [`OutgoingUserEvent::CustomToolResult`] reply so the platform
     /// routes it back to the waiting thread. Absent for primary-thread
     /// events.
+    ///
+    /// **Research-preview**: only populated when multi-agent threads
+    /// are in use.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session_thread_id: Option<String>,
 }
@@ -502,6 +527,10 @@ pub struct SpanModelRequestEndEvent {
     /// ID of the matching `span.model_request_start` event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model_request_start_id: Option<String>,
+    /// `true` if the model request errored. Inspect surrounding
+    /// `session.error` events for details.
+    #[serde(default)]
+    pub is_error: bool,
     /// Model usage counts. Matches the [`SessionUsage`](super::sessions::SessionUsage)
     /// shape but at finer per-call granularity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
