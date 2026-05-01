@@ -7,6 +7,8 @@
 //! Environments are not versioned; mutate via re-create rather than
 //! patch. The lifecycle is create → list/retrieve → archive → delete.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
@@ -308,6 +310,12 @@ pub struct Environment {
     pub ty: Option<String>,
     /// Unique name within the workspace.
     pub name: String,
+    /// Optional human-readable description.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Free-form key-value metadata attached at create time.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
     /// Container configuration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<EnvironmentConfig>,
@@ -385,6 +393,64 @@ pub struct Environments<'a> {
     client: &'a Client,
 }
 
+/// Request body for [`Environments::update`]. All fields optional with
+/// merge-patch semantics: omit a field to preserve.
+///
+/// `metadata` follows the same per-key delete protocol as
+/// [`MetadataPatch`](super::agents::MetadataPatch).
+#[derive(Debug, Clone, Default, Serialize)]
+#[non_exhaustive]
+pub struct UpdateEnvironmentRequest {
+    /// Replacement name (1-256 chars).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Replacement description.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    /// Per-key metadata patch.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<super::agents::MetadataPatch>,
+    /// Replacement environment configuration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config: Option<EnvironmentConfig>,
+}
+
+impl UpdateEnvironmentRequest {
+    /// Empty patch.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the new name.
+    #[must_use]
+    pub fn name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
+        self
+    }
+
+    /// Set the new description.
+    #[must_use]
+    pub fn description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// Apply a metadata patch.
+    #[must_use]
+    pub fn metadata(mut self, patch: super::agents::MetadataPatch) -> Self {
+        self.metadata = Some(patch);
+        self
+    }
+
+    /// Set the new config.
+    #[must_use]
+    pub fn config(mut self, config: EnvironmentConfig) -> Self {
+        self.config = Some(config);
+        self
+    }
+}
+
 impl<'a> Environments<'a> {
     pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
@@ -429,6 +495,27 @@ impl<'a> Environments<'a> {
                         req = req.query(&[(k, v)]);
                     }
                     req
+                },
+                &[MANAGED_AGENTS_BETA],
+            )
+            .await
+    }
+
+    /// `POST /v1/environments/{id}`. Update an environment with
+    /// merge-patch semantics; omitted fields are preserved.
+    pub async fn update(
+        &self,
+        environment_id: &str,
+        request: UpdateEnvironmentRequest,
+    ) -> Result<Environment> {
+        let path = format!("/v1/environments/{environment_id}");
+        let body = &request;
+        self.client
+            .execute_with_retry(
+                || {
+                    self.client
+                        .request_builder(reqwest::Method::POST, &path)
+                        .json(body)
                 },
                 &[MANAGED_AGENTS_BETA],
             )
@@ -629,5 +716,41 @@ mod tests {
             .delete("env_01")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_environment_posts_merge_patch() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/environments/env_42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "env_42",
+                "type": "environment",
+                "name": "renamed",
+                "description": "new desc",
+                "metadata": {"team": "data"},
+                "config": {"type": "cloud"},
+                "created_at": "2026-04-30T12:00:00Z",
+                "updated_at": "2026-04-30T12:01:00Z"
+            })))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let env = client
+            .managed_agents()
+            .environments()
+            .update(
+                "env_42",
+                UpdateEnvironmentRequest::new()
+                    .name("renamed")
+                    .description("new desc")
+                    .metadata(super::super::agents::MetadataPatch::new().set("team", "data")),
+            )
+            .await
+            .unwrap();
+        assert_eq!(env.name, "renamed");
+        assert_eq!(env.description.as_deref(), Some("new desc"));
+        assert_eq!(env.metadata.get("team").map(String::as_str), Some("data"));
     }
 }

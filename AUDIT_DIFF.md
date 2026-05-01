@@ -10,13 +10,12 @@ Legend: `✓` = exact match. Otherwise the section lists the diff.
 
 ## Summary
 
-12 / 28 pairs match exactly.
+13 / 28 pairs match exactly.
 
 Mismatches or warnings:
 - `src/managed_agents/sessions.rs:Session:BetaManagedAgentsSession`
 - `src/managed_agents/sessions.rs:SessionUsage:BetaManagedAgentsSessionUsage`
 - `src/managed_agents/agents.rs:Agent:BetaManagedAgentsAgent`
-- `src/managed_agents/environments.rs:Environment:BetaEnvironment`
 - `src/managed_agents/vaults.rs:Credential:BetaManagedAgentsCredential`
 - `src/managed_agents/memory_stores.rs:MemoryStore:BetaManagedAgentsGetMemoryStoreResponse`
 - `src/managed_agents/memory_stores.rs:Memory:BetaManagedAgentsMemory`
@@ -32,16 +31,7 @@ Mismatches or warnings:
 
 ## Pair-by-pair details
 
-### `Session` — `BetaManagedAgentsSession`  (rust=9, spec=14, shared=8)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `agent`
-- `environment_id`
-- `metadata`
-- `stats`
-- `type`
-- `vault_ids`
+### `Session` — `BetaManagedAgentsSession`  (rust=15, spec=14, shared=14)
 
 **Extra in Rust** (in our struct but not in spec):
 
@@ -63,12 +53,7 @@ Mismatches or warnings:
 
 - `callable_agents`
 
-### `Environment` — `BetaEnvironment`  (rust=7, spec=9, shared=7)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `description`
-- `metadata`
+### `Environment` — `BetaEnvironment`  ✓ (9/9)
 
 ### `Vault` — `BetaManagedAgentsVault`  ✓ (7/7)
 

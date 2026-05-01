@@ -50,6 +50,7 @@ const KNOWN_INCOMING_TAGS: &[&str] = &[
     "session.status_idle",
     "session.status_rescheduled",
     "session.status_terminated",
+    "session.deleted",
     "session.error",
     "session.outcome_evaluated",
     "session.thread_created",
@@ -180,6 +181,10 @@ pub enum KnownSessionEvent {
     /// Session ended due to an unrecoverable error.
     #[serde(rename = "session.status_terminated")]
     SessionStatusTerminated(EventEnvelope),
+    /// Session was deleted; emitted as the final event before the
+    /// session disappears from listings.
+    #[serde(rename = "session.deleted")]
+    SessionDeleted(EventEnvelope),
     /// An error occurred during processing.
     #[serde(rename = "session.error")]
     SessionError(SessionErrorEvent),

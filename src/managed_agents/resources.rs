@@ -309,6 +309,18 @@ impl Resources<'_> {
             .await
     }
 
+    /// `GET /v1/sessions/{session_id}/resources/{resource_id}`. Fetch a
+    /// single mounted resource by ID.
+    pub async fn retrieve(&self, resource_id: &str) -> Result<SessionResource> {
+        let path = format!("/v1/sessions/{}/resources/{resource_id}", self.session_id);
+        self.client
+            .execute_with_retry(
+                || self.client.request_builder(reqwest::Method::GET, &path),
+                &[MANAGED_AGENTS_BETA],
+            )
+            .await
+    }
+
     /// `POST /v1/sessions/{session_id}/resources`. Add a resource to a
     /// running session.
     pub async fn add(&self, resource: &SessionResource) -> Result<SessionResource> {
@@ -540,5 +552,36 @@ mod tests {
             .delete("sesrsc_b")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retrieve_resource_returns_typed_resource_by_id() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions/sesn_x/resources/sesrsc_r"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "sesrsc_r",
+                "type": "file",
+                "file_id": "file_abc",
+                "mount_path": "/mnt/session/data.csv"
+            })))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let r = client
+            .managed_agents()
+            .sessions()
+            .resources("sesn_x")
+            .retrieve("sesrsc_r")
+            .await
+            .unwrap();
+        match r {
+            SessionResource::File(f) => {
+                assert_eq!(f.id.as_deref(), Some("sesrsc_r"));
+                assert_eq!(f.file_id, "file_abc");
+            }
+            _ => panic!("expected File variant"),
+        }
     }
 }

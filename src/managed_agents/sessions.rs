@@ -5,12 +5,15 @@
 //! version) and an environment, and maintains conversation history
 //! across multiple interactions.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
 use crate::error::Result;
 use crate::pagination::Paginated;
 
+use super::agents::{AgentMcpServer, AgentModel, AgentTool, Skill};
 use super::resources::SessionResource;
 use super::MANAGED_AGENTS_BETA;
 
@@ -108,14 +111,33 @@ pub struct SessionUsage {
 pub struct Session {
     /// Stable session identifier (`sesn_...`).
     pub id: String,
+    /// Wire `type`; always `"session"`.
+    #[serde(rename = "type", default = "default_session_kind")]
+    pub kind: String,
     /// Lifecycle status.
     pub status: SessionStatus,
+    /// Resolved snapshot of the agent at session-creation time. Pinned
+    /// even if the underlying agent is later updated.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<SessionAgent>,
+    /// ID of the environment this session runs in.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub environment_id: Option<String>,
+    /// Vault references for MCP credential resolution.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub vault_ids: Vec<String>,
     /// Optional human-readable title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+    /// Free-form key-value metadata attached at create time.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
     /// Cumulative token usage. May be absent on freshly-created sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<SessionUsage>,
+    /// Wall-clock and active-runtime stats.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stats: Option<SessionStats>,
     /// Mounted resources: file uploads, GitHub repositories, memory
     /// stores. Each carries a server-assigned `id` (`sesrsc_...`) used
     /// for [`Resources::update`](super::resources::Resources::update)
@@ -123,8 +145,11 @@ pub struct Session {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub resources: Vec<SessionResource>,
     /// Outcome evaluations recorded against this session, when an
-    /// outcome was defined. Preserved as `Vec<Value>` until the
-    /// outcomes types land.
+    /// outcome was defined. **Research-preview**: this field is
+    /// populated only when the session uses the outcomes feature
+    /// (`user.define_outcome` events, requires
+    /// `managed-agents-2026-04-01-research-preview` beta header).
+    /// Preserved as `Vec<Value>` until the outcomes types land.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub outcome_evaluations: Vec<serde_json::Value>,
     /// Timestamp when the session was created (RFC3339 / ISO 8601).
@@ -136,6 +161,57 @@ pub struct Session {
     /// Set when the session has been archived.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<String>,
+}
+
+fn default_session_kind() -> String {
+    "session".to_owned()
+}
+
+/// Snapshot of an agent's configuration at the moment a session was
+/// created. Mirrors [`Agent`](super::agents::Agent) but is pinned --
+/// later edits to the agent don't change a session's recorded
+/// snapshot.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SessionAgent {
+    /// Wire `type`; always `"agent"`.
+    #[serde(rename = "type", default = "default_session_agent_kind")]
+    pub kind: String,
+    /// Agent ID (`agnt_...`).
+    pub id: String,
+    /// Pinned agent version.
+    pub version: u32,
+    /// Agent name as it was at snapshot time.
+    pub name: String,
+    /// Agent description.
+    pub description: String,
+    /// Model configuration.
+    pub model: AgentModel,
+    /// System prompt.
+    pub system: String,
+    /// Tools available to the agent at snapshot time.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tools: Vec<AgentTool>,
+    /// MCP servers configured.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<AgentMcpServer>,
+    /// Skills loaded into the container.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skills: Vec<Skill>,
+}
+
+fn default_session_agent_kind() -> String {
+    "agent".to_owned()
+}
+
+/// Wall-clock and active-runtime statistics for a session.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SessionStats {
+    /// Total elapsed seconds since session creation.
+    pub duration_seconds: f64,
+    /// Seconds the agent was actively executing (excluding idle time).
+    pub active_seconds: f64,
 }
 
 /// Request body for `POST /v1/sessions`.
@@ -288,6 +364,49 @@ pub struct Sessions<'a> {
     client: &'a Client,
 }
 
+/// Request body for [`Sessions::update`]. All fields optional with
+/// merge-patch semantics: omit a field to preserve.
+///
+/// `metadata` is per-key: provide a `Some(value)` to upsert, or `None`
+/// to delete the key. Unspecified keys are preserved.
+#[derive(Debug, Clone, Default, Serialize)]
+#[non_exhaustive]
+pub struct UpdateSessionRequest {
+    /// New human-readable title (1-500 chars). `None` to leave
+    /// unchanged.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Per-key metadata patch. See [`MetadataPatch`].
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<super::agents::MetadataPatch>,
+    /// Replace the vault attachments. **Currently rejected by the
+    /// server**; reserved for future use.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vault_ids: Vec<String>,
+}
+
+impl UpdateSessionRequest {
+    /// Empty patch.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the new title.
+    #[must_use]
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Apply a metadata patch.
+    #[must_use]
+    pub fn metadata(mut self, patch: super::agents::MetadataPatch) -> Self {
+        self.metadata = Some(patch);
+        self
+    }
+}
+
 impl<'a> Sessions<'a> {
     pub(crate) fn new(client: &'a Client) -> Self {
         Self { client }
@@ -332,6 +451,24 @@ impl<'a> Sessions<'a> {
                         req = req.query(&[(k, v)]);
                     }
                     req
+                },
+                &[MANAGED_AGENTS_BETA],
+            )
+            .await
+    }
+
+    /// Update a session. All fields on [`UpdateSessionRequest`] are
+    /// optional with merge-patch semantics: omit a field to preserve
+    /// its current value.
+    pub async fn update(&self, session_id: &str, request: UpdateSessionRequest) -> Result<Session> {
+        let path = format!("/v1/sessions/{session_id}");
+        let request_ref = &request;
+        self.client
+            .execute_with_retry(
+                || {
+                    self.client
+                        .request_builder(reqwest::Method::POST, &path)
+                        .json(request_ref)
                 },
                 &[MANAGED_AGENTS_BETA],
             )
@@ -650,5 +787,76 @@ mod tests {
             .delete("sesn_x")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn update_posts_to_session_path_with_merge_patch_body() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sessions/sesn_u"))
+            .and(body_partial_json(json!({
+                "title": "renamed",
+                "metadata": {"plan": "pro", "old": null}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(fake_session("sesn_u")))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let s = client
+            .managed_agents()
+            .sessions()
+            .update(
+                "sesn_u",
+                UpdateSessionRequest::new().title("renamed").metadata(
+                    super::super::agents::MetadataPatch::new()
+                        .set("plan", "pro")
+                        .delete("old"),
+                ),
+            )
+            .await
+            .unwrap();
+        assert_eq!(s.id, "sesn_u");
+    }
+
+    #[test]
+    fn session_decodes_full_response_with_agent_snapshot_environment_and_stats() {
+        // Fixture lifted from the spec example for BetaManagedAgentsSession.
+        let raw = json!({
+            "id": "sesn_full",
+            "type": "session",
+            "status": "idle",
+            "agent": {
+                "type": "agent",
+                "id": "agent_X",
+                "version": 3,
+                "name": "Lead",
+                "description": "An agent",
+                "model": "claude-sonnet-4-6",
+                "system": "you are an agent",
+                "tools": [],
+                "mcp_servers": [],
+                "skills": []
+            },
+            "environment_id": "env_Y",
+            "vault_ids": ["vlt_a", "vlt_b"],
+            "title": "demo",
+            "metadata": {"team": "research"},
+            "stats": {"duration_seconds": 123.5, "active_seconds": 45.0},
+            "resources": [],
+            "created_at": "2026-04-30T12:00:00Z",
+            "updated_at": "2026-04-30T12:01:00Z"
+        });
+        let s: Session = serde_json::from_value(raw).unwrap();
+        assert_eq!(s.kind, "session");
+        let agent = s.agent.unwrap();
+        assert_eq!(agent.id, "agent_X");
+        assert_eq!(agent.version, 3);
+        assert_eq!(s.environment_id.as_deref(), Some("env_Y"));
+        assert_eq!(s.vault_ids, vec!["vlt_a", "vlt_b"]);
+        assert_eq!(s.metadata.get("team").map(String::as_str), Some("research"));
+        let stats = s.stats.unwrap();
+        assert!((stats.duration_seconds - 123.5).abs() < 1e-6);
+        assert!((stats.active_seconds - 45.0).abs() < 1e-6);
     }
 }
