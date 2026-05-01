@@ -195,12 +195,14 @@ pub struct SessionAgent {
     pub version: u32,
     /// Agent name as it was at snapshot time.
     pub name: String,
-    /// Agent description.
-    pub description: String,
+    /// Agent description. May be `null` if no description was set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Model configuration.
     pub model: AgentModel,
-    /// System prompt.
-    pub system: String,
+    /// System prompt. May be `null` if no system prompt was set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
     /// Tools available to the agent at snapshot time.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<AgentTool>,

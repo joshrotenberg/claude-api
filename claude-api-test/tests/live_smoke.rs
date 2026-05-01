@@ -28,6 +28,11 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 
 use claude_api::batches::BatchRequest;
+use claude_api::managed_agents::agents::{AgentModel, CreateAgentRequest};
+use claude_api::managed_agents::environments::{CreateEnvironmentRequest, EnvironmentConfig};
+use claude_api::managed_agents::events::OutgoingUserEvent;
+use claude_api::managed_agents::memory_stores::{CreateMemoryRequest, CreateMemoryStoreRequest};
+use claude_api::managed_agents::sessions::CreateSessionRequest;
 use claude_api::messages::{CountTokensRequest, CreateMessageRequest};
 use claude_api::models::ListModelsParams;
 use claude_api::types::ModelId;
@@ -273,3 +278,145 @@ async fn live_skills_list() {
 // user_profiles endpoint requires explicit org enrollment (the live
 // API returns 404 NotFoundError for orgs without access). Re-add when
 // enrolled or when we want a 404-handling regression cassette.
+
+// =====================================================================
+// Tier 3: managed-agents full provisioning cycle
+// =====================================================================
+
+#[tokio::test]
+async fn live_memory_stores_lifecycle() {
+    record_or_replay("memory_stores_lifecycle", |client| async move {
+        // Create -> create memory -> list -> delete cycle.
+        let store = client
+            .managed_agents()
+            .memory_stores()
+            .create(
+                CreateMemoryStoreRequest::new("live-smoke-store")
+                    .with_description("Created by claude-api live smoke tests."),
+            )
+            .await
+            .expect("create memory store");
+        assert!(store.id.starts_with("memstore_"), "id={}", store.id);
+
+        let mem = client
+            .managed_agents()
+            .memory_stores()
+            .memories(&store.id)
+            .create(CreateMemoryRequest::new(
+                "/notes/test.md",
+                "# test\nA live-smoke memory.\n",
+            ))
+            .await
+            .expect("create memory");
+        assert!(mem.id.starts_with("mem_"), "id={}", mem.id);
+
+        let listed = client
+            .managed_agents()
+            .memory_stores()
+            .memories(&store.id)
+            .list(claude_api::managed_agents::memory_stores::ListMemoriesParams::default())
+            .await
+            .expect("list memories");
+        assert!(!listed.data.is_empty());
+
+        // Best-effort cleanup: delete the memory then the store.
+        let _ = client
+            .managed_agents()
+            .memory_stores()
+            .memories(&store.id)
+            .delete(&mem.id)
+            .await;
+        let _ = client
+            .managed_agents()
+            .memory_stores()
+            .delete(&store.id)
+            .await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn live_managed_agents_full_cycle() {
+    record_or_replay("managed_agents_full_cycle", |client| async move {
+        // 1) Provision an environment.
+        let env = client
+            .managed_agents()
+            .environments()
+            .create(CreateEnvironmentRequest::new(
+                "live-smoke-env",
+                EnvironmentConfig::cloud().build(),
+            ))
+            .await
+            .expect("create environment");
+        assert!(env.id.starts_with("env_"), "env id={}", env.id);
+
+        // 2) Provision an agent (haiku, no tools, minimal system).
+        let agent_req = CreateAgentRequest::builder()
+            .name("live-smoke-agent")
+            .model(AgentModel::String("claude-haiku-4-5".into()))
+            .system("You are a live-test agent. Reply with one short word.")
+            .build()
+            .expect("build agent request");
+        let agent = client
+            .managed_agents()
+            .agents()
+            .create(agent_req)
+            .await
+            .expect("create agent");
+        assert!(agent.id.starts_with("agent_"), "agent id={}", agent.id);
+
+        // 3) Open a session.
+        let session_req = CreateSessionRequest::builder()
+            .agent(agent.id.clone())
+            .environment_id(env.id.clone())
+            .title("live-smoke session")
+            .build()
+            .expect("build session request");
+        let session = client
+            .managed_agents()
+            .sessions()
+            .create(session_req)
+            .await
+            .expect("create session");
+        assert!(session.id.starts_with("sesn_"), "sesn id={}", session.id);
+
+        // 4) Send a single user message. The session may or may not
+        // complete a model turn before we tear down -- we just verify
+        // events_send + events_list produce something coherent.
+        client
+            .managed_agents()
+            .sessions()
+            .events(&session.id)
+            .send(&[OutgoingUserEvent::message("ping")])
+            .await
+            .expect("events send");
+
+        let events = client
+            .managed_agents()
+            .sessions()
+            .events(&session.id)
+            .list()
+            .await
+            .expect("events list");
+        assert!(
+            !events.data.is_empty(),
+            "expected at least the echoed user.message event"
+        );
+
+        // 5) Clean up: archive session, archive agent, archive env.
+        // Best-effort -- if any archive fails we still want the prior
+        // provisioning recorded for the cassette.
+        let _ = client
+            .managed_agents()
+            .sessions()
+            .archive(&session.id)
+            .await;
+        let _ = client.managed_agents().agents().archive(&agent.id).await;
+        let _ = client
+            .managed_agents()
+            .environments()
+            .archive(&env.id)
+            .await;
+    })
+    .await;
+}

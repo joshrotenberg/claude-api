@@ -606,14 +606,16 @@ pub struct Agent {
     pub ty: Option<String>,
     /// Agent name.
     pub name: String,
-    /// Description.
-    #[serde(default)]
-    pub description: String,
+    /// Description. May be `null` on the wire when no description was
+    /// provided at create time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
     /// Model identifier and configuration.
     pub model: AgentModel,
-    /// System prompt (may be empty string when not set).
-    #[serde(default)]
-    pub system: String,
+    /// System prompt. May be `null` on the wire when no system prompt
+    /// was provided at create time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub system: Option<String>,
     /// Configured MCP servers.
     #[serde(default)]
     pub mcp_servers: Vec<AgentMcpServer>,
