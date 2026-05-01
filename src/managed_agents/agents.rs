@@ -554,6 +554,44 @@ impl Skill {
 }
 
 // =====================================================================
+// Callable agents (multi-agent / threads)
+// =====================================================================
+
+/// Reference to another agent that this agent is permitted to call.
+///
+/// Used in [`CreateAgentRequest::callable_agents`] and
+/// [`UpdateAgentRequest::callable_agents`] when configuring a
+/// multi-agent coordinator. At runtime, when the coordinator delegates
+/// to one of these, the platform spawns a new
+/// [`Thread`](crate::managed_agents::threads::Thread).
+///
+/// Wire form is `{type: "agent", id, version}` -- the same shape as
+/// the pinned [`AgentRef`](super::sessions::AgentRef).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct CallableAgent {
+    /// Always `"agent"`.
+    #[serde(rename = "type")]
+    pub ty: String,
+    /// Agent ID.
+    pub id: String,
+    /// Pinned version. Required.
+    pub version: u32,
+}
+
+impl CallableAgent {
+    /// Build a callable-agent reference pinned to a version.
+    #[must_use]
+    pub fn new(id: impl Into<String>, version: u32) -> Self {
+        Self {
+            ty: "agent".into(),
+            id: id.into(),
+            version,
+        }
+    }
+}
+
+// =====================================================================
 // Agent (response shape)
 // =====================================================================
 
@@ -588,6 +626,10 @@ pub struct Agent {
     /// Free-form metadata.
     #[serde(default)]
     pub metadata: HashMap<String, String>,
+    /// Other agents this agent is permitted to call (multi-agent
+    /// coordinators only). Empty for non-coordinator agents.
+    #[serde(default)]
+    pub callable_agents: Vec<CallableAgent>,
     /// Current version. Starts at 1, increments on every update.
     pub version: u32,
     /// Creation timestamp (RFC3339).
@@ -629,6 +671,14 @@ pub struct CreateAgentRequest {
     /// Metadata. Max 16 pairs (64-char keys, 512-char values).
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub metadata: HashMap<String, String>,
+    /// Other agents this agent is permitted to call. Setting this
+    /// makes the agent a multi-agent coordinator: at runtime,
+    /// delegations spawn new
+    /// [`Thread`](crate::managed_agents::threads::Thread)s. Only one
+    /// level of delegation is supported -- callable agents cannot
+    /// themselves have callable agents.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub callable_agents: Vec<CallableAgent>,
 }
 
 impl CreateAgentRequest {
@@ -650,6 +700,7 @@ pub struct CreateAgentRequestBuilder {
     skills: Vec<Skill>,
     tools: Vec<AgentTool>,
     metadata: HashMap<String, String>,
+    callable_agents: Vec<CallableAgent>,
 }
 
 impl CreateAgentRequestBuilder {
@@ -709,6 +760,13 @@ impl CreateAgentRequestBuilder {
         self
     }
 
+    /// Append a callable-agent reference (for multi-agent coordinators).
+    #[must_use]
+    pub fn callable_agent(mut self, callable: CallableAgent) -> Self {
+        self.callable_agents.push(callable);
+        self
+    }
+
     /// Finalize.
     ///
     /// # Errors
@@ -731,6 +789,7 @@ impl CreateAgentRequestBuilder {
             skills: self.skills,
             tools: self.tools,
             metadata: self.metadata,
+            callable_agents: self.callable_agents,
         })
     }
 }
@@ -779,6 +838,10 @@ pub struct UpdateAgentRequest {
     /// Per-key metadata patch. See [`MetadataPatch`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<MetadataPatch>,
+    /// Replacement callable-agents list. `Some(vec![])` clears (turns
+    /// the agent back into a non-coordinator).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callable_agents: Option<Vec<CallableAgent>>,
 }
 
 impl UpdateAgentRequest {
@@ -845,6 +908,13 @@ impl UpdateAgentRequest {
     #[must_use]
     pub fn metadata(mut self, patch: MetadataPatch) -> Self {
         self.metadata = Some(patch);
+        self
+    }
+
+    /// Replace the callable-agents list. Pass an empty Vec to clear.
+    #[must_use]
+    pub fn callable_agents(mut self, callable: Vec<CallableAgent>) -> Self {
+        self.callable_agents = Some(callable);
         self
     }
 }
@@ -1253,6 +1323,51 @@ mod tests {
         let agent = client.managed_agents().agents().create(req).await.unwrap();
         assert_eq!(agent.id, "agent_01");
         assert_eq!(agent.version, 1);
+    }
+
+    #[tokio::test]
+    async fn create_coordinator_agent_includes_callable_agents() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/agents"))
+            .and(body_partial_json(json!({
+                "name": "Engineering Lead",
+                "model": "claude-opus-4-7",
+                "callable_agents": [
+                    {"type": "agent", "id": "agent_reviewer", "version": 2},
+                    {"type": "agent", "id": "agent_test_writer", "version": 5}
+                ]
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json({
+                let mut r = fake_agent_response();
+                r["callable_agents"] = json!([
+                    {"type": "agent", "id": "agent_reviewer", "version": 2},
+                    {"type": "agent", "id": "agent_test_writer", "version": 5}
+                ]);
+                r
+            }))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let req = CreateAgentRequest::builder()
+            .name("Engineering Lead")
+            .model("claude-opus-4-7")
+            .callable_agent(CallableAgent::new("agent_reviewer", 2))
+            .callable_agent(CallableAgent::new("agent_test_writer", 5))
+            .build()
+            .unwrap();
+        let agent = client.managed_agents().agents().create(req).await.unwrap();
+        assert_eq!(agent.callable_agents.len(), 2);
+        assert_eq!(agent.callable_agents[0].id, "agent_reviewer");
+        assert_eq!(agent.callable_agents[0].version, 2);
+    }
+
+    #[test]
+    fn callable_agent_serializes_with_type_tag() {
+        let c = CallableAgent::new("agent_x", 3);
+        let v = serde_json::to_value(&c).unwrap();
+        assert_eq!(v, json!({"type": "agent", "id": "agent_x", "version": 3}));
     }
 
     #[tokio::test]

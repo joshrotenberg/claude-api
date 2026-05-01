@@ -160,10 +160,10 @@ pub enum KnownSessionEvent {
     AgentThreadContextCompacted(EventEnvelope),
     /// Agent sent a message to another multi-agent thread.
     #[serde(rename = "agent.thread_message_sent")]
-    AgentThreadMessageSent(EventEnvelope),
+    AgentThreadMessageSent(AgentThreadMessageSentEvent),
     /// Agent received a message from another multi-agent thread.
     #[serde(rename = "agent.thread_message_received")]
-    AgentThreadMessageReceived(EventEnvelope),
+    AgentThreadMessageReceived(AgentThreadMessageReceivedEvent),
 
     // -----------------------------------------------------------------
     // Session events
@@ -188,7 +188,7 @@ pub enum KnownSessionEvent {
     SessionOutcomeEvaluated(EventEnvelope),
     /// Coordinator spawned a new multi-agent thread.
     #[serde(rename = "session.thread_created")]
-    SessionThreadCreated(EventEnvelope),
+    SessionThreadCreated(SessionThreadCreatedEvent),
     /// A multi-agent thread finished its current work.
     #[serde(rename = "session.thread_idle")]
     SessionThreadIdle(EventEnvelope),
@@ -297,6 +297,14 @@ pub struct AgentToolUseEvent {
     pub name: String,
     /// Tool input.
     pub input: serde_json::Value,
+    /// Set on multi-agent sessions when the request originated in a
+    /// sub-agent thread. Echo this on the corresponding
+    /// [`OutgoingUserEvent::ToolConfirmation`] or
+    /// [`OutgoingUserEvent::CustomToolResult`] reply so the platform
+    /// routes it back to the waiting thread. Absent for primary-thread
+    /// events.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_thread_id: Option<String>,
 }
 
 /// `agent.tool_result`.
@@ -329,6 +337,64 @@ pub type AgentMcpToolResultEvent = AgentToolResultEvent;
 /// `agent.custom_tool_use`: agent invokes one of the caller's custom
 /// tools. The session pauses; respond with [`UserCustomToolResult`].
 pub type AgentCustomToolUseEvent = AgentToolUseEvent;
+
+/// `session.thread_created`. Carries the new thread's ID and the
+/// model the spawned agent runs against.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SessionThreadCreatedEvent {
+    /// Envelope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Server-side recording timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed_at: Option<String>,
+    /// Newly-spawned thread ID (`sthr_...`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_thread_id: Option<String>,
+    /// Model the spawned agent runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
+}
+
+/// `agent.thread_message_sent`. The agent sent a message to another
+/// thread (typically the coordinator delegating to a sub-agent).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AgentThreadMessageSentEvent {
+    /// Envelope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Server-side recording timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed_at: Option<String>,
+    /// Destination thread ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_thread_id: Option<String>,
+    /// Message content as raw JSON (typed shape may evolve).
+    #[serde(default)]
+    pub content: serde_json::Value,
+}
+
+/// `agent.thread_message_received`. The agent received a message from
+/// another thread (typically a sub-agent responding to the
+/// coordinator).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct AgentThreadMessageReceivedEvent {
+    /// Envelope.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    /// Server-side recording timestamp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processed_at: Option<String>,
+    /// Source thread ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_thread_id: Option<String>,
+    /// Message content as raw JSON.
+    #[serde(default)]
+    pub content: serde_json::Value,
+}
 
 /// `session.status_idle`. Carries an optional `stop_reason` describing
 /// why the agent paused.
@@ -593,6 +659,12 @@ pub enum OutgoingUserEvent {
         /// Optional error flag.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         is_error: Option<bool>,
+        /// Multi-agent routing: set to the value from the originating
+        /// `agent.custom_tool_use` event's `session_thread_id` field
+        /// when responding to a sub-agent thread. Leave `None` for
+        /// primary-thread events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_thread_id: Option<String>,
     },
     /// Allow or deny a pending tool call.
     #[serde(rename = "user.tool_confirmation")]
@@ -604,6 +676,10 @@ pub enum OutgoingUserEvent {
         /// Optional explanation for a deny.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         deny_message: Option<String>,
+        /// Multi-agent routing: set to the originating event's
+        /// `session_thread_id`. Leave `None` for primary-thread events.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        session_thread_id: Option<String>,
     },
     /// Define an outcome.
     #[serde(rename = "user.define_outcome")]
@@ -632,6 +708,7 @@ impl OutgoingUserEvent {
             tool_use_id: tool_use_id.into(),
             result: ConfirmationResult::Allow,
             deny_message: None,
+            session_thread_id: None,
         }
     }
 
@@ -642,6 +719,7 @@ impl OutgoingUserEvent {
             tool_use_id: tool_use_id.into(),
             result: ConfirmationResult::Deny,
             deny_message: Some(deny_message.into()),
+            session_thread_id: None,
         }
     }
 
@@ -655,7 +733,28 @@ impl OutgoingUserEvent {
             custom_tool_use_id: custom_tool_use_id.into(),
             content: vec![UserContentBlock::text(text)],
             is_error: None,
+            session_thread_id: None,
         }
+    }
+
+    /// Attach a `session_thread_id` to a `ToolConfirmation` or
+    /// `CustomToolResult` event for multi-agent thread routing. No-op
+    /// on other variants.
+    #[must_use]
+    pub fn with_session_thread_id(mut self, thread_id: impl Into<String>) -> Self {
+        let id = thread_id.into();
+        match &mut self {
+            Self::ToolConfirmation {
+                session_thread_id, ..
+            }
+            | Self::CustomToolResult {
+                session_thread_id, ..
+            } => {
+                *session_thread_id = Some(id);
+            }
+            Self::Message { .. } | Self::Interrupt {} | Self::DefineOutcome(_) => {}
+        }
+        self
     }
 }
 
@@ -941,6 +1040,92 @@ mod tests {
                 "deny_message": "policy violation"
             })
         );
+    }
+
+    #[test]
+    fn session_thread_created_event_decodes_thread_id_and_model() {
+        let raw = json!({
+            "type": "session.thread_created",
+            "id": "sevt_1",
+            "session_thread_id": "sthr_a",
+            "model": "claude-opus-4-7"
+        });
+        let ev: SessionEvent = serde_json::from_value(raw).unwrap();
+        let SessionEvent::Known(KnownSessionEvent::SessionThreadCreated(t)) = ev else {
+            panic!("expected SessionThreadCreated");
+        };
+        assert_eq!(t.session_thread_id.as_deref(), Some("sthr_a"));
+        assert_eq!(t.model.as_deref(), Some("claude-opus-4-7"));
+    }
+
+    #[test]
+    fn agent_thread_message_sent_event_decodes_to_thread_id() {
+        let raw = json!({
+            "type": "agent.thread_message_sent",
+            "id": "sevt_2",
+            "to_thread_id": "sthr_b",
+            "content": [{"type": "text", "text": "delegate"}]
+        });
+        let ev: SessionEvent = serde_json::from_value(raw).unwrap();
+        let SessionEvent::Known(KnownSessionEvent::AgentThreadMessageSent(m)) = ev else {
+            panic!("expected AgentThreadMessageSent");
+        };
+        assert_eq!(m.to_thread_id.as_deref(), Some("sthr_b"));
+    }
+
+    #[test]
+    fn agent_thread_message_received_event_decodes_from_thread_id() {
+        let raw = json!({
+            "type": "agent.thread_message_received",
+            "id": "sevt_3",
+            "from_thread_id": "sthr_b",
+            "content": [{"type": "text", "text": "done"}]
+        });
+        let ev: SessionEvent = serde_json::from_value(raw).unwrap();
+        let SessionEvent::Known(KnownSessionEvent::AgentThreadMessageReceived(m)) = ev else {
+            panic!("expected AgentThreadMessageReceived");
+        };
+        assert_eq!(m.from_thread_id.as_deref(), Some("sthr_b"));
+    }
+
+    #[test]
+    fn agent_tool_use_event_carries_session_thread_id_when_in_subagent_thread() {
+        let raw = json!({
+            "type": "agent.tool_use",
+            "id": "sevt_4",
+            "name": "bash",
+            "input": {"cmd": "ls"},
+            "session_thread_id": "sthr_b"
+        });
+        let ev: SessionEvent = serde_json::from_value(raw).unwrap();
+        let SessionEvent::Known(KnownSessionEvent::AgentToolUse(t)) = ev else {
+            panic!("expected AgentToolUse");
+        };
+        assert_eq!(t.session_thread_id.as_deref(), Some("sthr_b"));
+    }
+
+    #[test]
+    fn outgoing_tool_confirmation_with_thread_id_routes_reply() {
+        let ev = OutgoingUserEvent::allow_tool("sevt_4").with_session_thread_id("sthr_b");
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["session_thread_id"], "sthr_b");
+        assert_eq!(v["type"], "user.tool_confirmation");
+    }
+
+    #[test]
+    fn outgoing_custom_tool_result_with_thread_id_routes_reply() {
+        let ev = OutgoingUserEvent::custom_tool_result_text("sevt_5", "ok")
+            .with_session_thread_id("sthr_c");
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["session_thread_id"], "sthr_c");
+        assert_eq!(v["custom_tool_use_id"], "sevt_5");
+    }
+
+    #[test]
+    fn outgoing_tool_confirmation_without_thread_id_omits_field() {
+        let ev = OutgoingUserEvent::allow_tool("sevt_4");
+        let v = serde_json::to_value(&ev).unwrap();
+        assert!(v.get("session_thread_id").is_none(), "{v}");
     }
 
     #[tokio::test]

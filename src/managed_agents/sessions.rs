@@ -370,6 +370,17 @@ impl<'a> Sessions<'a> {
         }
     }
 
+    /// Sub-namespace for thread operations on a multi-agent session
+    /// (`/v1/sessions/{id}/threads`). Sub-agent threads are spawned at
+    /// runtime when the coordinator delegates to a `callable_agent`.
+    #[must_use]
+    pub fn threads(&self, session_id: impl Into<String>) -> super::threads::Threads<'_> {
+        super::threads::Threads {
+            client: self.client,
+            session_id: session_id.into(),
+        }
+    }
+
     /// Delete a session permanently. The session must not be `running`;
     /// send a `user.interrupt` event first if necessary. Files, memory
     /// stores, environments, and agents are independent and not

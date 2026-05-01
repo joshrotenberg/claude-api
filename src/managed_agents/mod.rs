@@ -41,6 +41,7 @@ pub mod events;
 pub mod memory_stores;
 pub mod resources;
 pub mod sessions;
+pub mod threads;
 pub mod vaults;
 
 /// Top-level namespace handle for the Managed Agents API.
