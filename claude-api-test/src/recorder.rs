@@ -53,7 +53,7 @@ pub struct RecorderConfig {
     /// trimmed. Example: `"https://api.anthropic.com"`.
     pub upstream: String,
     /// Filesystem path for the JSONL cassette. The file is created if
-    /// missing and appended to as exchanges complete.
+    /// missing, truncated on start, and exchanges are written as they complete.
     pub cassette_path: PathBuf,
     /// Header names (lowercase) whose values are dropped before being
     /// recorded to disk. Defaults to [`DEFAULT_REDACT_HEADERS`]. Body
@@ -86,8 +86,9 @@ pub struct Recorder {
 impl Recorder {
     /// Bind to `127.0.0.1:0`, spawn a forwarder task, and return a
     /// handle whose [`Self::url`] points at the proxy. The cassette
-    /// file at `config.cassette_path` is opened in append mode (created
-    /// if missing).
+    /// file at `config.cassette_path` is **truncated** on start --
+    /// each recording run produces a fresh cassette. To accumulate
+    /// across runs, copy the file off between sessions.
     pub async fn start(config: RecorderConfig) -> std::io::Result<Self> {
         let upstream = config.upstream.trim_end_matches('/').to_owned();
         let listener = TcpListener::bind(("127.0.0.1", 0)).await?;
@@ -96,7 +97,8 @@ impl Recorder {
 
         let file = tokio::fs::OpenOptions::new()
             .create(true)
-            .append(true)
+            .write(true)
+            .truncate(true)
             .open(&config.cassette_path)
             .await?;
         let writer = Arc::new(Mutex::new(file));

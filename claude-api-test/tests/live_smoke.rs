@@ -27,6 +27,7 @@
 use std::future::Future;
 use std::path::{Path, PathBuf};
 
+use claude_api::batches::BatchRequest;
 use claude_api::messages::{CountTokensRequest, CreateMessageRequest};
 use claude_api::models::ListModelsParams;
 use claude_api::types::ModelId;
@@ -186,3 +187,89 @@ async fn live_messages_create_minimal() {
     })
     .await;
 }
+
+// =====================================================================
+// Tier 2: bounded write+read+cleanup cycles
+// =====================================================================
+
+#[tokio::test]
+async fn live_files_upload_retrieve_delete() {
+    record_or_replay("files_upload_retrieve_delete", |client| async move {
+        let payload = b"live-test fixture\n".to_vec();
+        let uploaded = client
+            .files()
+            .upload_bytes(payload.clone(), "live_smoke.txt", "text/plain")
+            .await
+            .expect("upload file");
+        assert!(uploaded.id.starts_with("file_"), "id={}", uploaded.id);
+        assert_eq!(uploaded.filename, "live_smoke.txt");
+        assert_eq!(uploaded.size_bytes, payload.len() as u64);
+
+        let retrieved = client
+            .files()
+            .get(&uploaded.id)
+            .await
+            .expect("retrieve file");
+        assert_eq!(retrieved.id, uploaded.id);
+
+        let deleted = client
+            .files()
+            .delete(&uploaded.id)
+            .await
+            .expect("delete file");
+        assert_eq!(deleted.id, uploaded.id);
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn live_batches_create_cancel_delete() {
+    record_or_replay("batches_create_cancel_delete", |client| async move {
+        let entry = BatchRequest::new(
+            "live-test-1",
+            CreateMessageRequest::builder()
+                .model(ModelId::HAIKU_4_5)
+                .max_tokens(8)
+                .user("ping")
+                .build()
+                .expect("build batch entry"),
+        );
+        let batch = client
+            .batches()
+            .create(vec![entry])
+            .await
+            .expect("create batch");
+        assert!(batch.id.starts_with("msgbatch_"), "id={}", batch.id);
+
+        // Cancel before processing produces a no-op or quick state
+        // change; we don't assert on the post-cancel status because
+        // it varies (canceling vs ended).
+        let _ = client.batches().cancel(&batch.id).await.expect("cancel");
+
+        // Delete may fail if the batch is still in 'canceling' state.
+        // Tolerate either outcome -- the cassette records whichever
+        // status was returned.
+        let _ = client.batches().delete(&batch.id).await;
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn live_skills_list() {
+    record_or_replay("skills_list", |client| async move {
+        let page = client
+            .skills()
+            .list(claude_api::skills::ListSkillsParams::default())
+            .await
+            .expect("list skills");
+        // Page may be empty depending on the org; just confirm the
+        // envelope decodes.
+        let _ = page.data.len();
+    })
+    .await;
+}
+
+// NOTE: live_user_profiles_list intentionally omitted. The
+// user_profiles endpoint requires explicit org enrollment (the live
+// API returns 404 NotFoundError for orgs without access). Re-add when
+// enrolled or when we want a 404-handling regression cassette.
