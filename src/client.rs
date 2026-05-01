@@ -89,6 +89,15 @@ impl Client {
         crate::admin::Admin::new(self)
     }
 
+    /// Namespace handle for the Skills API (beta).
+    ///
+    /// Gated on the `skills` feature.
+    #[cfg(feature = "skills")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "skills")))]
+    pub fn skills(&self) -> crate::skills::Skills<'_> {
+        crate::skills::Skills::new(self)
+    }
+
     /// Build a [`reqwest::RequestBuilder`] preloaded with the version
     /// and user-agent headers. Auth headers are added later by the
     /// configured [`RequestSigner`](crate::auth::RequestSigner). Endpoints
