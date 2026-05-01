@@ -17,7 +17,7 @@ use crate::client::Client;
 use crate::error::Result;
 use crate::pagination::Paginated;
 
-use super::MANAGED_AGENTS_BETA;
+use super::betas;
 use super::events::SessionEvent;
 
 /// One thread inside a multi-agent session.
@@ -49,6 +49,9 @@ pub struct Thread {
 pub struct Threads<'a> {
     pub(crate) client: &'a Client,
     pub(crate) session_id: String,
+    /// Inherited from
+    /// [`Sessions::with_research_preview`](super::sessions::Sessions::with_research_preview).
+    pub(crate) research_preview: bool,
 }
 
 impl Threads<'_> {
@@ -60,7 +63,7 @@ impl Threads<'_> {
         self.client
             .execute_with_retry(
                 || self.client.request_builder(reqwest::Method::GET, &path),
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await
     }
@@ -72,6 +75,7 @@ impl Threads<'_> {
             client: self.client,
             session_id: self.session_id.clone(),
             thread_id: thread_id.into(),
+            research_preview: self.research_preview,
         }
     }
 }
@@ -81,6 +85,7 @@ pub struct ThreadEvents<'a> {
     client: &'a Client,
     session_id: String,
     thread_id: String,
+    research_preview: bool,
 }
 
 impl ThreadEvents<'_> {
@@ -93,7 +98,7 @@ impl ThreadEvents<'_> {
         self.client
             .execute_with_retry(
                 || self.client.request_builder(reqwest::Method::GET, &path),
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await
     }
@@ -117,7 +122,7 @@ impl ThreadEvents<'_> {
                 self.client
                     .request_builder(reqwest::Method::GET, &path)
                     .header("accept", "text/event-stream"),
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await?;
         Ok(crate::managed_agents::events::EventStream::from_response(

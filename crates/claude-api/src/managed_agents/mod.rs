@@ -91,7 +91,21 @@ impl<'a> ManagedAgents<'a> {
 pub(crate) const MANAGED_AGENTS_BETA: &str = "managed-agents-2026-04-01";
 
 /// Additional beta header value required for research-preview features
-/// like outcomes. Add **alongside** [`MANAGED_AGENTS_BETA`].
-#[allow(dead_code)] // used by the outcomes module once it lands
+/// like outcomes. Add **alongside** [`MANAGED_AGENTS_BETA`]. Opt in
+/// via [`Sessions::with_research_preview`](sessions::Sessions::with_research_preview).
 pub(crate) const MANAGED_AGENTS_RESEARCH_PREVIEW_BETA: &str =
     "managed-agents-2026-04-01-research-preview";
+
+/// Pick the right beta-header slice for a Managed Agents request.
+///
+/// Returns the base header on its own, or both headers when the
+/// caller has opted into research-preview features (outcomes via
+/// `user.define_outcome` events, span outcome events, and the
+/// `Session.outcome_evaluations` field).
+pub(crate) const fn betas(research_preview: bool) -> &'static [&'static str] {
+    if research_preview {
+        &[MANAGED_AGENTS_BETA, MANAGED_AGENTS_RESEARCH_PREVIEW_BETA]
+    } else {
+        &[MANAGED_AGENTS_BETA]
+    }
+}
