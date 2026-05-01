@@ -58,6 +58,9 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
+pub mod recorder;
+pub use recorder::{Recorder, RecorderConfig, DEFAULT_REDACT_HEADERS};
+
 /// One recorded HTTP exchange. Preserved on disk as one JSONL line.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]

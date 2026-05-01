@@ -305,9 +305,14 @@ dependencies = [
 name = "claude-api-test"
 version = "0.4.1"
 dependencies = [
+ "bytes",
  "claude-api",
  "http 1.4.0",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
  "pretty_assertions",
+ "reqwest",
  "serde",
  "serde_json",
  "tokio",
