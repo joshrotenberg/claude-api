@@ -9,7 +9,7 @@
 //!
 //! Every Skills method automatically sends
 //! `anthropic-beta: skills-2025-10-02`. Override the beta version on
-//! the [`Client`](crate::Client) builder if a newer revision is current.
+//! the [`Client`] builder if a newer revision is current.
 //!
 //! # Endpoints
 //!

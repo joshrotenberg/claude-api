@@ -149,7 +149,8 @@ pub enum ApprovalDecision {
 /// Async-callable predicate consulted before each tool dispatch.
 ///
 /// Implement this trait for stateful approvers, or use the closure
-/// adapter [`fn_approver`] / [`RunOptions::with_approver_fn`].
+/// adapter [`fn_approver`] /
+/// [`RunOptions::with_approver_fn`](crate::tool_dispatch::runner::RunOptions::with_approver_fn).
 #[async_trait]
 pub trait ToolApprover: Send + Sync + 'static {
     /// Inspect a pending tool dispatch and return a verdict.

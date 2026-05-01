@@ -6,9 +6,9 @@
 //!
 //! # `#[derive(Tool)]`
 //!
-//! Derive an implementation of [`claude_api::tool_dispatch::Tool`] for a
-//! struct that already implements [`serde::Deserialize`] and
-//! [`schemars::JsonSchema`]. The struct's fields define the tool input;
+//! Derive an implementation of `claude_api::tool_dispatch::Tool` for a
+//! struct that already implements `serde::Deserialize` and
+//! `schemars::JsonSchema`. The struct's fields define the tool input;
 //! the user supplies the behavior via an inherent `async fn run(self)`.
 //!
 //! ```ignore
@@ -46,7 +46,7 @@ use proc_macro2::TokenStream as TokenStream2;
 use quote::quote;
 use syn::{parse_macro_input, Data, DeriveInput, Lit, Meta};
 
-/// Derive [`claude_api::tool_dispatch::Tool`] for a struct.
+/// Derive `claude_api::tool_dispatch::Tool` for a struct.
 ///
 /// See the [crate-level docs](crate) for the supported attribute syntax and
 /// the requirements on the underlying struct.

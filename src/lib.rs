@@ -90,7 +90,7 @@ pub use error::{Error, Result};
 /// Procedural-macro re-exports for the `derive` feature.
 ///
 /// Bring [`Tool`](crate::derive::Tool) into scope to derive
-/// [`tool_dispatch::Tool`](crate::tool_dispatch::Tool) on a struct that
+/// [`tool_dispatch::Tool`] on a struct that
 /// implements [`serde::Deserialize`] and [`schemars::JsonSchema`].
 #[cfg(feature = "derive")]
 #[cfg_attr(docsrs, doc(cfg(feature = "derive")))]
