@@ -3,7 +3,7 @@ members = [".", "claude-api-derive", "claude-api-test"]
 
 [package]
 name = "claude-api"
-version = "0.4.5"
+version = "0.4.6"
 edition = "2021"
 rust-version = "1.82"
 description = "Type-safe Rust client for the Anthropic API"
@@ -43,6 +43,7 @@ vertex = ["dep:gcp_auth"]
 
 admin = ["async"]
 skills = ["async"]
+user-profiles = ["async"]
 managed-agents = []
 managed-agents-preview = ["async"]
 pricing = []
@@ -70,7 +71,7 @@ aws-sigv4 = { version = "1", optional = true }
 aws-credential-types = { version = "1", optional = true }
 gcp_auth = { version = "0.12", optional = true }
 
-claude-api-derive = { version = "0.4.5", path = "claude-api-derive", optional = true }
+claude-api-derive = { version = "0.4.6", path = "claude-api-derive", optional = true }
 
 [build-dependencies]
 serde = { version = "1.0", features = ["derive"] }

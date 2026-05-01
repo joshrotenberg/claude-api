@@ -98,6 +98,15 @@ impl Client {
         crate::skills::Skills::new(self)
     }
 
+    /// Namespace handle for the User Profiles API (beta).
+    ///
+    /// Gated on the `user-profiles` feature.
+    #[cfg(feature = "user-profiles")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "user-profiles")))]
+    pub fn user_profiles(&self) -> crate::user_profiles::UserProfiles<'_> {
+        crate::user_profiles::UserProfiles::new(self)
+    }
+
     /// Build a [`reqwest::RequestBuilder`] preloaded with the version
     /// and user-agent headers. Auth headers are added later by the
     /// configured [`RequestSigner`](crate::auth::RequestSigner). Endpoints

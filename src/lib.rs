@@ -12,6 +12,7 @@ pub(crate) const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 pub(crate) const USER_AGENT: &str = concat!("claude-api-rs/", env!("CARGO_PKG_VERSION"));
 
 pub mod auth;
+pub mod beta;
 pub mod error;
 
 #[cfg(feature = "bedrock")]
@@ -77,6 +78,11 @@ pub mod admin;
 #[cfg_attr(docsrs, doc(cfg(feature = "skills")))]
 pub mod skills;
 
+#[cfg(feature = "user-profiles")]
+#[cfg_attr(docsrs, doc(cfg(feature = "user-profiles")))]
+pub mod user_profiles;
+
+pub use beta::BetaHeader;
 #[cfg(feature = "async")]
 pub use client::{Client, ClientBuilder};
 pub use error::{Error, Result};
