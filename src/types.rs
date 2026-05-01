@@ -155,6 +155,11 @@ pub struct Usage {
     /// Service tier the request actually ran on.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<ServiceTier>,
+    /// Inference geography the request was routed to (e.g.
+    /// `"not_available"`, region codes when reported). Open string for
+    /// forward-compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub inference_geo: Option<String>,
 }
 
 /// Per-TTL breakdown of cache-creation tokens.
@@ -275,6 +280,7 @@ mod tests {
                 web_search_requests: 3,
             }),
             service_tier: Some(ServiceTier::Standard),
+            inference_geo: Some("us-east-1".into()),
         };
         let json = serde_json::to_string(&u).expect("serialize");
         let parsed: Usage = serde_json::from_str(&json).expect("deserialize");
