@@ -10,13 +10,12 @@ Legend: `✓` = exact match. Otherwise the section lists the diff.
 
 ## Summary
 
-16 / 28 pairs match exactly.
+17 / 28 pairs match exactly.
 
 Mismatches or warnings:
 - `src/managed_agents/sessions.rs:Session:BetaManagedAgentsSession`
 - `src/managed_agents/sessions.rs:SessionUsage:BetaManagedAgentsSessionUsage`
 - `src/managed_agents/agents.rs:Agent:BetaManagedAgentsAgent`
-- `src/managed_agents/vaults.rs:Credential:BetaManagedAgentsCredential`
 - `src/managed_agents/resources.rs:FileResource:BetaManagedAgentsFileResource`
 - `src/managed_agents/resources.rs:GitHubRepositoryResource:BetaManagedAgentsGitHubRepositoryResource`
 - `src/managed_agents/resources.rs:MemoryStoreResource:BetaManagedAgentsMemoryStoreResource`
@@ -54,18 +53,7 @@ Mismatches or warnings:
 
 ### `Vault` — `BetaManagedAgentsVault`  ✓ (7/7)
 
-### `Credential` — `BetaManagedAgentsCredential`  (rust=8, spec=9, shared=6)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `auth`
-- `metadata`
-- `vault_id`
-
-**Extra in Rust** (in our struct but not in spec):
-
-- `auth_type`
-- `mcp_server_url`
+### `Credential` — `BetaManagedAgentsCredential`  ✓ (9/9)
 
 ### `MemoryStore` — `BetaManagedAgentsMemoryStore`  ✓ (8/8)
 

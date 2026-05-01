@@ -307,7 +307,9 @@ impl McpOauthBuilder {
     }
 }
 
-/// A stored credential. Secret fields are never echoed in API responses.
+/// A stored credential. Secret fields are never echoed in API
+/// responses; the [`auth`](Self::auth) object carries only the
+/// non-secret metadata (server URL, expiry, etc.).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Credential {
@@ -316,15 +318,18 @@ pub struct Credential {
     /// Wire type tag (`"credential"`).
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub ty: Option<String>,
+    /// Parent vault ID.
+    pub vault_id: String,
     /// Optional display name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub display_name: Option<String>,
-    /// MCP server URL the credential authenticates against.
-    pub mcp_server_url: String,
-    /// Auth shape (`mcp_oauth` or `static_bearer`). Returned without
-    /// the secret fields.
+    /// Free-form metadata for mapping back to caller-side records.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
+    /// Auth shape with non-secret fields populated. `None` if the
+    /// server doesn't return an auth block.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub auth_type: Option<String>,
+    pub auth: Option<CredentialAuthResponse>,
     /// Creation timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
@@ -334,6 +339,36 @@ pub struct Credential {
     /// Set when the credential is archived.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub archived_at: Option<String>,
+}
+
+/// Auth payload as returned on a credential **response**. Mirrors
+/// [`CredentialAuth`] but never carries the secret token fields.
+///
+/// Forward-compatible: unknown wire `type` tags fall through to
+/// [`Self::Other`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CredentialAuthResponse {
+    /// MCP OAuth credential metadata (no token).
+    McpOauth {
+        /// MCP server URL.
+        mcp_server_url: String,
+        /// Token expiration (RFC3339).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expires_at: Option<String>,
+        /// Refresh configuration, when configured.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh: Option<serde_json::Value>,
+    },
+    /// Static-bearer credential metadata (no token).
+    StaticBearer {
+        /// MCP server URL.
+        mcp_server_url: String,
+    },
+    /// Forward-compat fallback for unknown auth `type` values.
+    #[serde(other)]
+    Other,
 }
 
 /// Request body for `POST /v1/vaults/{id}/credentials`.
@@ -729,8 +764,12 @@ mod tests {
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "id": "cred_01",
-                "mcp_server_url": "https://mcp.linear.app/mcp",
-                "auth_type": "static_bearer"
+                "type": "credential",
+                "vault_id": "vlt_01",
+                "auth": {
+                    "type": "static_bearer",
+                    "mcp_server_url": "https://mcp.linear.app/mcp"
+                }
             })))
             .mount(&mock)
             .await;
@@ -765,8 +804,12 @@ mod tests {
             })))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "id": "cred_01",
-                "mcp_server_url": "https://mcp.slack.com/mcp",
-                "auth_type": "mcp_oauth"
+                "type": "credential",
+                "vault_id": "vlt_01",
+                "auth": {
+                    "type": "mcp_oauth",
+                    "mcp_server_url": "https://mcp.slack.com/mcp"
+                }
             })))
             .mount(&mock)
             .await;
@@ -889,8 +932,13 @@ mod tests {
             .and(path("/v1/vaults/vlt_01/credentials/cred_01"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "id": "cred_01",
-                "mcp_server_url": "https://mcp.linear.app/mcp",
-                "auth_type": "static_bearer"
+                "type": "credential",
+                "vault_id": "vlt_01",
+                "display_name": "Linear",
+                "auth": {
+                    "type": "static_bearer",
+                    "mcp_server_url": "https://mcp.linear.app/mcp"
+                }
             })))
             .mount(&mock)
             .await;
@@ -902,7 +950,13 @@ mod tests {
             .retrieve("cred_01")
             .await
             .unwrap();
-        assert_eq!(c.auth_type.as_deref(), Some("static_bearer"));
+        assert_eq!(c.vault_id, "vlt_01");
+        match c.auth.unwrap() {
+            CredentialAuthResponse::StaticBearer { mcp_server_url } => {
+                assert_eq!(mcp_server_url, "https://mcp.linear.app/mcp");
+            }
+            _ => panic!("expected StaticBearer auth"),
+        }
     }
 
     #[tokio::test]
@@ -912,7 +966,7 @@ mod tests {
             .and(path("/v1/vaults/vlt_01/credentials"))
             .and(wiremock::matchers::query_param("limit", "5"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "data": [{"id": "cred_01", "mcp_server_url": "https://mcp.x/mcp"}],
+                "data": [{"id": "cred_01", "vault_id": "vlt_01"}],
                 "has_more": false
             })))
             .mount(&mock)
@@ -973,7 +1027,8 @@ mod tests {
             .and(path("/v1/vaults/vlt_01/credentials/cred_01/archive"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "id": "cred_01",
-                "mcp_server_url": "https://mcp.linear.app/mcp",
+                "type": "credential",
+                "vault_id": "vlt_01",
                 "archived_at": "2026-04-30T12:00:00Z"
             })))
             .mount(&mock)
