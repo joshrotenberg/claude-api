@@ -708,6 +708,95 @@ impl Events<'_> {
             )
             .await
     }
+
+    /// `GET /v1/sessions/{id}/stream`. Returns an
+    /// [`EventStream`](crate::managed_agents::events::EventStream)
+    /// yielding [`SessionEvent`]s as they're emitted server-side.
+    ///
+    /// **Open the stream before sending events** to avoid a race: only
+    /// events emitted *after* the stream is opened are delivered. To
+    /// reconnect to an existing session without missing events, open
+    /// the stream first, then [`list`](Self::list) the history to seed
+    /// a set of seen event IDs and skip duplicates from the live tail.
+    ///
+    /// Streaming requests are *not* retried -- a mid-stream retry
+    /// would silently drop events.
+    #[cfg(feature = "streaming")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "streaming")))]
+    pub async fn stream(&self) -> Result<EventStream> {
+        let path = format!("/v1/sessions/{}/stream", self.session_id);
+        let response = self
+            .client
+            .execute_streaming(
+                self.client
+                    .request_builder(reqwest::Method::GET, &path)
+                    .header("accept", "text/event-stream"),
+                &[MANAGED_AGENTS_BETA],
+            )
+            .await?;
+        Ok(EventStream::from_response(response))
+    }
+}
+
+// =====================================================================
+// Streaming event stream
+// =====================================================================
+
+/// SSE-backed stream of [`SessionEvent`]s for a Managed Agents session.
+///
+/// Obtain via [`Events::stream`]. Iterate as a `futures_util::Stream`:
+///
+/// ```ignore
+/// use futures_util::StreamExt;
+/// let mut stream = client
+///     .managed_agents()
+///     .sessions()
+///     .events("sesn_x")
+///     .stream()
+///     .await?;
+/// while let Some(event) = stream.next().await {
+///     match event? {
+///         SessionEvent::Known(KnownSessionEvent::AgentMessage(m)) => {
+///             // handle text deltas
+///         }
+///         _ => {}
+///     }
+/// }
+/// ```
+#[cfg(feature = "streaming")]
+#[cfg_attr(docsrs, doc(cfg(feature = "streaming")))]
+pub struct EventStream {
+    inner: futures_util::stream::BoxStream<'static, Result<SessionEvent>>,
+}
+
+#[cfg(feature = "streaming")]
+impl EventStream {
+    /// Wrap a streaming HTTP response into a typed event stream.
+    pub(crate) fn from_response(response: reqwest::Response) -> Self {
+        use futures_util::StreamExt;
+        Self {
+            inner: crate::sse::into_typed_stream::<SessionEvent>(response).boxed(),
+        }
+    }
+}
+
+#[cfg(feature = "streaming")]
+impl futures_util::Stream for EventStream {
+    type Item = Result<SessionEvent>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.inner.as_mut().poll_next(cx)
+    }
+}
+
+#[cfg(feature = "streaming")]
+impl std::fmt::Debug for EventStream {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EventStream").finish_non_exhaustive()
+    }
 }
 
 #[cfg(test)]
@@ -877,6 +966,85 @@ mod tests {
             .send(&[OutgoingUserEvent::message("go")])
             .await
             .unwrap();
+    }
+
+    #[cfg(feature = "streaming")]
+    #[tokio::test]
+    async fn events_stream_yields_typed_session_events() {
+        use futures_util::StreamExt;
+        let sse_body = concat!(
+            "event: message\n",
+            "data: {\"type\":\"agent.message\",\"id\":\"sevt_1\",\"content\":[{\"type\":\"text\",\"text\":\"hi\"}]}\n",
+            "\n",
+            "event: message\n",
+            "data: {\"type\":\"session.status_idle\",\"id\":\"sevt_2\",\"stop_reason\":{\"type\":\"end_turn\"}}\n",
+            "\n",
+        );
+
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions/sesn_x/stream"))
+            .and(header("anthropic-beta", "managed-agents-2026-04-01"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(sse_body),
+            )
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let mut stream = client
+            .managed_agents()
+            .sessions()
+            .events("sesn_x")
+            .stream()
+            .await
+            .unwrap();
+
+        let first = stream.next().await.unwrap().unwrap();
+        assert!(matches!(
+            first,
+            SessionEvent::Known(KnownSessionEvent::AgentMessage(_))
+        ));
+
+        let second = stream.next().await.unwrap().unwrap();
+        let SessionEvent::Known(KnownSessionEvent::SessionStatusIdle(idle)) = second else {
+            panic!("expected SessionStatusIdle");
+        };
+        assert!(matches!(
+            idle.stop_reason,
+            Some(StopReason::Known(KnownStopReason::EndTurn))
+        ));
+    }
+
+    #[cfg(feature = "streaming")]
+    #[tokio::test]
+    async fn events_stream_propagates_unauthorized_response() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions/sesn_x/stream"))
+            .respond_with(
+                ResponseTemplate::new(401)
+                    .insert_header("request-id", "req_unauth")
+                    .set_body_json(json!({
+                        "type": "error",
+                        "error": {"type": "authentication_error", "message": "bad key"}
+                    })),
+            )
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let err = client
+            .managed_agents()
+            .sessions()
+            .events("sesn_x")
+            .stream()
+            .await
+            .unwrap_err();
+        assert_eq!(err.status(), Some(http::StatusCode::UNAUTHORIZED));
+        assert_eq!(err.request_id(), Some("req_unauth"));
     }
 
     #[tokio::test]

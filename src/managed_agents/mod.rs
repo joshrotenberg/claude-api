@@ -36,7 +36,9 @@
 use crate::client::Client;
 
 pub mod events;
+pub mod memory_stores;
 pub mod sessions;
+pub mod vaults;
 
 /// Top-level namespace handle for the Managed Agents API.
 ///
@@ -54,6 +56,18 @@ impl<'a> ManagedAgents<'a> {
     #[must_use]
     pub fn sessions(&self) -> sessions::Sessions<'a> {
         sessions::Sessions::new(self.client)
+    }
+
+    /// Vaults sub-namespace (per-user MCP credential vaults).
+    #[must_use]
+    pub fn vaults(&self) -> vaults::Vaults<'a> {
+        vaults::Vaults::new(self.client)
+    }
+
+    /// Memory stores sub-namespace (persistent memory across sessions).
+    #[must_use]
+    pub fn memory_stores(&self) -> memory_stores::MemoryStores<'a> {
+        memory_stores::MemoryStores::new(self.client)
     }
 }
 
