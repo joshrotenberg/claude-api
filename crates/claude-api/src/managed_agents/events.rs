@@ -13,7 +13,7 @@ use crate::error::Result;
 use crate::forward_compat::dispatch_known_or_other;
 use crate::pagination::Paginated;
 
-use super::MANAGED_AGENTS_BETA;
+use super::betas;
 
 // =====================================================================
 // Wire envelope
@@ -809,6 +809,11 @@ struct SendEventsRequest<'a> {
 pub struct Events<'a> {
     pub(crate) client: &'a Client,
     pub(crate) session_id: String,
+    /// Inherited from
+    /// [`Sessions::with_research_preview`](super::sessions::Sessions::with_research_preview).
+    /// When `true`, the research-preview beta header is sent in
+    /// addition to the base managed-agents header.
+    pub(crate) research_preview: bool,
 }
 
 impl Events<'_> {
@@ -825,7 +830,7 @@ impl Events<'_> {
                         .request_builder(reqwest::Method::POST, &path)
                         .json(&body)
                 },
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await?;
         Ok(())
@@ -838,7 +843,7 @@ impl Events<'_> {
         self.client
             .execute_with_retry(
                 || self.client.request_builder(reqwest::Method::GET, &path),
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await
     }
@@ -864,7 +869,7 @@ impl Events<'_> {
                 self.client
                     .request_builder(reqwest::Method::GET, &path)
                     .header("accept", "text/event-stream"),
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await?;
         Ok(EventStream::from_response(response))

@@ -13,8 +13,8 @@ use crate::client::Client;
 use crate::error::Result;
 use crate::pagination::Paginated;
 
-use super::MANAGED_AGENTS_BETA;
 use super::agents::{AgentMcpServer, AgentModel, AgentTool, Skill};
+use super::betas;
 use super::resources::SessionResource;
 
 /// Session lifecycle status.
@@ -374,8 +374,17 @@ impl ListSessionsParams {
 /// Namespace handle for the Sessions API.
 ///
 /// Obtained via [`Client::managed_agents`](Client::managed_agents).
+///
+/// To use the **outcomes** feature
+/// (`user.define_outcome` events, `span.outcome_evaluation_*` events,
+/// `Session.outcome_evaluations` field), call
+/// [`Self::with_research_preview`] to opt into the
+/// `managed-agents-2026-04-01-research-preview` beta header on every
+/// subsequent call. Without that opt-in the server returns a 4xx for
+/// outcomes-related requests.
 pub struct Sessions<'a> {
     client: &'a Client,
+    research_preview: bool,
 }
 
 /// Request body for [`Sessions::update`]. All fields optional with
@@ -424,7 +433,41 @@ impl UpdateSessionRequest {
 
 impl<'a> Sessions<'a> {
     pub(crate) fn new(client: &'a Client) -> Self {
-        Self { client }
+        Self {
+            client,
+            research_preview: false,
+        }
+    }
+
+    /// Opt into the
+    /// `managed-agents-2026-04-01-research-preview` beta header on
+    /// every subsequent call made through this handle (and any
+    /// downstream [`Events`](super::events::Events) /
+    /// [`Threads`](super::threads::Threads) sub-handles).
+    ///
+    /// Required when:
+    ///
+    /// - Sending `user.define_outcome` events
+    /// - Reading `Session.outcome_evaluations` from a response
+    /// - Streaming `span.outcome_evaluation_*` events
+    ///
+    /// Multi-agent threads do **not** require this header (per the
+    /// public guide's curl examples), but enabling it is harmless --
+    /// the server ignores beta headers it doesn't recognize for an
+    /// endpoint.
+    ///
+    /// ```no_run
+    /// # use claude_api::Client;
+    /// # async fn run(client: &Client) -> Result<(), claude_api::Error> {
+    /// let sessions = client.managed_agents().sessions().with_research_preview();
+    /// // Now `sessions.events(id).send(...)` and `sessions.retrieve(id)`
+    /// // include the research-preview header automatically.
+    /// # Ok(()) }
+    /// ```
+    #[must_use]
+    pub fn with_research_preview(mut self) -> Self {
+        self.research_preview = true;
+        self
     }
 
     /// Create a session. Returns the freshly-provisioned [`Session`].
@@ -437,7 +480,7 @@ impl<'a> Sessions<'a> {
                         .request_builder(reqwest::Method::POST, "/v1/sessions")
                         .json(request_ref)
                 },
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await
     }
@@ -448,7 +491,7 @@ impl<'a> Sessions<'a> {
         self.client
             .execute_with_retry(
                 || self.client.request_builder(reqwest::Method::GET, &path),
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await
     }
@@ -467,7 +510,7 @@ impl<'a> Sessions<'a> {
                     }
                     req
                 },
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await
     }
@@ -485,7 +528,7 @@ impl<'a> Sessions<'a> {
                         .request_builder(reqwest::Method::POST, &path)
                         .json(request_ref)
                 },
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await
     }
@@ -497,23 +540,27 @@ impl<'a> Sessions<'a> {
         self.client
             .execute_with_retry(
                 || self.client.request_builder(reqwest::Method::POST, &path),
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await
     }
 
     /// Sub-namespace for the session-events API
-    /// (`/v1/sessions/{id}/events` and the SSE stream).
+    /// (`/v1/sessions/{id}/events` and the SSE stream). Inherits the
+    /// research-preview opt-in from this `Sessions` handle.
     #[must_use]
     pub fn events(&self, session_id: impl Into<String>) -> super::events::Events<'_> {
         super::events::Events {
             client: self.client,
             session_id: session_id.into(),
+            research_preview: self.research_preview,
         }
     }
 
     /// Sub-namespace for resource operations on a session
-    /// (`/v1/sessions/{id}/resources`).
+    /// (`/v1/sessions/{id}/resources`). Resources don't use
+    /// research-preview features but the flag is propagated for
+    /// consistency.
     #[must_use]
     pub fn resources(&self, session_id: impl Into<String>) -> super::resources::Resources<'_> {
         super::resources::Resources {
@@ -530,6 +577,7 @@ impl<'a> Sessions<'a> {
         super::threads::Threads {
             client: self.client,
             session_id: session_id.into(),
+            research_preview: self.research_preview,
         }
     }
 
@@ -546,7 +594,7 @@ impl<'a> Sessions<'a> {
             .client
             .execute_with_retry(
                 || self.client.request_builder(reqwest::Method::DELETE, &path),
-                &[MANAGED_AGENTS_BETA],
+                betas(self.research_preview),
             )
             .await?;
         Ok(())
@@ -873,5 +921,116 @@ mod tests {
         let stats = s.stats.unwrap();
         assert!((stats.duration_seconds - 123.5).abs() < 1e-6);
         assert!((stats.active_seconds - 45.0).abs() < 1e-6);
+    }
+
+    #[tokio::test]
+    async fn retrieve_without_research_preview_sends_only_base_beta() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions/sesn_x"))
+            .and(header("anthropic-beta", "managed-agents-2026-04-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(fake_session("sesn_x")))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let _ = client
+            .managed_agents()
+            .sessions()
+            .retrieve("sesn_x")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retrieve_with_research_preview_sends_both_beta_headers() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions/sesn_x"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(fake_session("sesn_x")))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let _ = client
+            .managed_agents()
+            .sessions()
+            .with_research_preview()
+            .retrieve("sesn_x")
+            .await
+            .unwrap();
+        let received = &mock.received_requests().await.unwrap()[0];
+        let beta = received
+            .headers
+            .get("anthropic-beta")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            beta.contains("managed-agents-2026-04-01")
+                && beta.contains("managed-agents-2026-04-01-research-preview"),
+            "expected both beta values, got {beta}"
+        );
+    }
+
+    #[tokio::test]
+    async fn events_sub_handle_inherits_research_preview_flag() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sessions/sesn_x/events"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        client
+            .managed_agents()
+            .sessions()
+            .with_research_preview()
+            .events("sesn_x")
+            .send(&[super::super::events::OutgoingUserEvent::message("ping")])
+            .await
+            .unwrap();
+        let received = &mock.received_requests().await.unwrap()[0];
+        let beta = received
+            .headers
+            .get("anthropic-beta")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            beta.contains("managed-agents-2026-04-01-research-preview"),
+            "events sub-handle did not inherit research_preview flag (beta={beta})"
+        );
+    }
+
+    #[tokio::test]
+    async fn threads_sub_handle_inherits_research_preview_flag() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions/sesn_x/threads"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [],
+                "has_more": false
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let _ = client
+            .managed_agents()
+            .sessions()
+            .with_research_preview()
+            .threads("sesn_x")
+            .list()
+            .await
+            .unwrap();
+        let received = &mock.received_requests().await.unwrap()[0];
+        let beta = received
+            .headers
+            .get("anthropic-beta")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert!(
+            beta.contains("managed-agents-2026-04-01-research-preview"),
+            "threads sub-handle did not inherit research_preview flag (beta={beta})"
+        );
     }
 }
