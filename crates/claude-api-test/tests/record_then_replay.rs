@@ -171,6 +171,6 @@ async fn recorder_redacts_auth_headers_by_default() {
 
 fn tempfile_path(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
-    p.push(format!("claude_api_test_{}_{}", std::process::id(), name,));
+    p.push(format!("claude_api_test_{}_{}", std::process::id(), name));
     p
 }
