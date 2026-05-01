@@ -2,11 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
-## [0.5.1](https://github.com/joshrotenberg/claude-api/compare/v0.5.0...v0.5.1) - 2026-05-01
+## [0.5.1] - 2026-05-01
 
-### Other
+### Documentation
 
-- regenerate changelog ([#18](https://github.com/joshrotenberg/claude-api/pull/18))
+- Rewrite README + crate-level lib.rs + beef up thin module headers 
+
+### Miscellaneous
+
+- Regenerate changelog 
+- Release v0.5.1 
 
 ## [0.5.0] - 2026-05-01
 
