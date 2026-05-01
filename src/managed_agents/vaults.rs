@@ -793,6 +793,180 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retrieve_vault_returns_typed_record() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/vaults/vlt_01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "vlt_01",
+                "type": "vault",
+                "display_name": "Alice"
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let v = client
+            .managed_agents()
+            .vaults()
+            .retrieve("vlt_01")
+            .await
+            .unwrap();
+        assert_eq!(v.id, "vlt_01");
+    }
+
+    #[tokio::test]
+    async fn list_vaults_passes_pagination_query_params() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/vaults"))
+            .and(wiremock::matchers::query_param("limit", "10"))
+            .and(wiremock::matchers::query_param("after", "vlt_x"))
+            .and(wiremock::matchers::query_param("include_archived", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"id": "vlt_01", "display_name": "Alice"}],
+                "has_more": false
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let page = client
+            .managed_agents()
+            .vaults()
+            .list(ListVaultsParams {
+                after: Some("vlt_x".into()),
+                limit: Some(10),
+                include_archived: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.data.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn archive_vault_posts_to_archive_subpath() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/vaults/vlt_01/archive"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "vlt_01",
+                "display_name": "Alice",
+                "archived_at": "2026-04-30T12:00:00Z"
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let v = client
+            .managed_agents()
+            .vaults()
+            .archive("vlt_01")
+            .await
+            .unwrap();
+        assert!(v.archived_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_vault_returns_unit() {
+        let mock = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/vaults/vlt_01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        client
+            .managed_agents()
+            .vaults()
+            .delete("vlt_01")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retrieve_credential_returns_record_without_secrets() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/vaults/vlt_01/credentials/cred_01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "cred_01",
+                "mcp_server_url": "https://mcp.linear.app/mcp",
+                "auth_type": "static_bearer"
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let c = client
+            .managed_agents()
+            .vaults()
+            .credentials("vlt_01")
+            .retrieve("cred_01")
+            .await
+            .unwrap();
+        assert_eq!(c.auth_type.as_deref(), Some("static_bearer"));
+    }
+
+    #[tokio::test]
+    async fn list_credentials_paginates_under_vault() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/vaults/vlt_01/credentials"))
+            .and(wiremock::matchers::query_param("limit", "5"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"id": "cred_01", "mcp_server_url": "https://mcp.x/mcp"}],
+                "has_more": false
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let page = client
+            .managed_agents()
+            .vaults()
+            .credentials("vlt_01")
+            .list(ListVaultsParams {
+                limit: Some(5),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.data.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn delete_credential_returns_unit() {
+        let mock = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/vaults/vlt_01/credentials/cred_01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        client
+            .managed_agents()
+            .vaults()
+            .credentials("vlt_01")
+            .delete("cred_01")
+            .await
+            .unwrap();
+    }
+
+    #[test]
+    fn token_endpoint_auth_round_trips_all_three_variants() {
+        for auth in [
+            TokenEndpointAuth::None,
+            TokenEndpointAuth::ClientSecretBasic {
+                client_secret: "abc".into(),
+            },
+            TokenEndpointAuth::ClientSecretPost {
+                client_secret: "def".into(),
+            },
+        ] {
+            let v = serde_json::to_value(&auth).unwrap();
+            let parsed: TokenEndpointAuth = serde_json::from_value(v).unwrap();
+            assert_eq!(parsed, auth);
+        }
+    }
+
+    #[tokio::test]
     async fn archive_credential_posts_to_archive_subpath() {
         let mock = MockServer::start().await;
         Mock::given(method("POST"))

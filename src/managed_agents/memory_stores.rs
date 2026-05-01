@@ -720,6 +720,196 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn retrieve_memory_store_returns_typed_record() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/memory_stores/memstore_01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "memstore_01",
+                "type": "memory_store",
+                "name": "Prefs"
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let s = client
+            .managed_agents()
+            .memory_stores()
+            .retrieve("memstore_01")
+            .await
+            .unwrap();
+        assert_eq!(s.id, "memstore_01");
+    }
+
+    #[tokio::test]
+    async fn update_memory_store_patches_name_and_description() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/memory_stores/memstore_01"))
+            .and(wiremock::matchers::body_partial_json(json!({
+                "name": "Renamed",
+                "description": "New desc."
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "memstore_01",
+                "name": "Renamed",
+                "description": "New desc."
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let s = client
+            .managed_agents()
+            .memory_stores()
+            .update(
+                "memstore_01",
+                UpdateMemoryStoreRequest {
+                    name: Some("Renamed".into()),
+                    description: Some("New desc.".into()),
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(s.name, "Renamed");
+    }
+
+    #[tokio::test]
+    async fn list_memory_stores_passes_include_archived_query() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/memory_stores"))
+            .and(wiremock::matchers::query_param("include_archived", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [{"id": "memstore_01", "name": "Prefs", "archived_at": "2026-04-30T12:00:00Z"}],
+                "has_more": false
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let page = client
+            .managed_agents()
+            .memory_stores()
+            .list(ListMemoryStoresParams {
+                include_archived: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.data.len(), 1);
+        assert!(page.data[0].archived_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn archive_memory_store_posts_to_archive_subpath() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/memory_stores/memstore_01/archive"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "memstore_01",
+                "name": "Prefs",
+                "archived_at": "2026-04-30T12:00:00Z"
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let s = client
+            .managed_agents()
+            .memory_stores()
+            .archive("memstore_01")
+            .await
+            .unwrap();
+        assert!(s.archived_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn delete_memory_store_returns_unit() {
+        let mock = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/memory_stores/memstore_01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        client
+            .managed_agents()
+            .memory_stores()
+            .delete("memstore_01")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retrieve_memory_returns_full_content() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/memory_stores/memstore_01/memories/mem_01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "mem_01",
+                "type": "file",
+                "path": "/notes.md",
+                "content": "Hello.",
+                "content_sha256": "abc"
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let m = client
+            .managed_agents()
+            .memory_stores()
+            .memories("memstore_01")
+            .retrieve("mem_01")
+            .await
+            .unwrap();
+        assert_eq!(m.content.as_deref(), Some("Hello."));
+    }
+
+    #[tokio::test]
+    async fn delete_memory_returns_unit() {
+        let mock = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/memory_stores/memstore_01/memories/mem_01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        client
+            .managed_agents()
+            .memory_stores()
+            .memories("memstore_01")
+            .delete("mem_01")
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retrieve_memory_version_includes_content() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path(
+                "/v1/memory_stores/memstore_01/memory_versions/memver_01",
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "memver_01",
+                "memory_id": "mem_01",
+                "operation": "create",
+                "path": "/notes.md",
+                "content": "Original."
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let v = client
+            .managed_agents()
+            .memory_stores()
+            .memory_versions("memstore_01")
+            .retrieve("memver_01")
+            .await
+            .unwrap();
+        assert_eq!(v.content.as_deref(), Some("Original."));
+        assert_eq!(v.operation.as_deref(), Some("create"));
+    }
+
+    #[tokio::test]
     async fn redact_memory_version_posts_to_redact_subpath() {
         let mock = MockServer::start().await;
         Mock::given(method("POST"))
