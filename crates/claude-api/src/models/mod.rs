@@ -57,14 +57,122 @@ pub struct ModelInfo {
     pub max_input_tokens: Option<u64>,
     /// Capability matrix: which features (citations, code execution,
     /// thinking, image input, etc.) the model supports and at what
-    /// level. Currently preserved as raw JSON; promote to a typed
-    /// `BetaModelCapabilities` struct in a future revision.
+    /// level.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub capabilities: Option<serde_json::Value>,
+    pub capabilities: Option<ModelCapabilities>,
 }
 
 fn default_model_kind() -> String {
     "model".to_owned()
+}
+
+/// Whether a single capability is supported by the model.
+///
+/// The atomic unit of [`ModelCapabilities`]. New capability flags
+/// added by Anthropic show up as new fields on the wider struct;
+/// each is shaped as a `CapabilitySupport` so the whole tree
+/// destructures uniformly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct CapabilitySupport {
+    /// `true` if the model supports the capability this entry
+    /// describes.
+    pub supported: bool,
+}
+
+/// Per-model feature matrix returned on every [`ModelInfo`].
+///
+/// Each leaf is a [`CapabilitySupport`] (a single boolean). The
+/// nested capabilities ([`ContextManagementCapability`],
+/// [`EffortCapability`], [`ThinkingCapability`]) carry both a
+/// top-level `supported` flag and a per-variant breakdown.
+///
+/// `#[non_exhaustive]` -- new capability fields appear over time;
+/// callers should pattern-match conservatively.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ModelCapabilities {
+    /// Batch API support.
+    pub batch: CapabilitySupport,
+    /// Citation generation in responses.
+    pub citations: CapabilitySupport,
+    /// Code-execution server tool.
+    pub code_execution: CapabilitySupport,
+    /// Context-management strategies (`compact`, `clear_thinking`,
+    /// etc.).
+    pub context_management: ContextManagementCapability,
+    /// `effort` (`reasoning_effort`) levels.
+    pub effort: EffortCapability,
+    /// Image content blocks on requests.
+    pub image_input: CapabilitySupport,
+    /// PDF document blocks on requests.
+    pub pdf_input: CapabilitySupport,
+    /// Structured-output / strict-schema mode.
+    pub structured_outputs: CapabilitySupport,
+    /// Extended thinking (`thinking` block) and its type variants.
+    pub thinking: ThinkingCapability,
+}
+
+/// Context-management support and strategies.
+///
+/// `supported` is the top-level gate. The named-strategy fields
+/// (one per dated strategy ID) are `Option<CapabilitySupport>` since
+/// not every model exposes every strategy and Anthropic ships new
+/// strategies with date-suffixed names.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ContextManagementCapability {
+    /// Whether any context-management strategy is supported.
+    pub supported: bool,
+    /// `clear_thinking_20251015` strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_thinking_20251015: Option<CapabilitySupport>,
+    /// `clear_tool_uses_20250919` strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clear_tool_uses_20250919: Option<CapabilitySupport>,
+    /// `compact_20260112` strategy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub compact_20260112: Option<CapabilitySupport>,
+}
+
+/// `effort` (`reasoning_effort`) capability + per-level support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct EffortCapability {
+    /// Whether `effort` is supported at all.
+    pub supported: bool,
+    /// `low` effort.
+    pub low: CapabilitySupport,
+    /// `medium` effort.
+    pub medium: CapabilitySupport,
+    /// `high` effort.
+    pub high: CapabilitySupport,
+    /// `max` effort.
+    pub max: CapabilitySupport,
+    /// `xhigh` effort (only on some models). Optional in the spec.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub xhigh: Option<CapabilitySupport>,
+}
+
+/// Extended-thinking capability + type variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ThinkingCapability {
+    /// Whether thinking is supported at all.
+    pub supported: bool,
+    /// Per-`type` thinking-mode breakdown.
+    #[serde(default)]
+    pub types: ThinkingTypes,
+}
+
+/// Thinking-mode variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct ThinkingTypes {
+    /// `type: "adaptive"` (auto-decide thinking).
+    pub adaptive: CapabilitySupport,
+    /// `type: "enabled"` (always think).
+    pub enabled: CapabilitySupport,
 }
 
 /// Query parameters for `GET /v1/models`.
@@ -375,5 +483,145 @@ mod api_tests {
         let client = client_for(&mock);
         let err = client.models().get("nope").await.unwrap_err();
         assert_eq!(err.status(), Some(http::StatusCode::NOT_FOUND));
+    }
+
+    #[test]
+    fn capability_support_round_trips_minimal_payload() {
+        let raw = json!({"supported": true});
+        let cs: CapabilitySupport = serde_json::from_value(raw.clone()).unwrap();
+        assert!(cs.supported);
+        assert_eq!(serde_json::to_value(cs).unwrap(), raw);
+    }
+
+    #[test]
+    fn model_capabilities_decodes_full_real_world_response() {
+        // Lifted verbatim from the live cassette
+        // (live_models_get_sonnet_4_6.jsonl). Pin against drift.
+        let raw = json!({
+            "batch": {"supported": true},
+            "citations": {"supported": true},
+            "code_execution": {"supported": true},
+            "context_management": {
+                "clear_thinking_20251015": {"supported": true},
+                "clear_tool_uses_20250919": {"supported": true},
+                "compact_20260112": {"supported": true},
+                "supported": true
+            },
+            "effort": {
+                "high": {"supported": true},
+                "low": {"supported": true},
+                "max": {"supported": true},
+                "medium": {"supported": true},
+                "supported": true
+            },
+            "image_input": {"supported": true},
+            "pdf_input": {"supported": true},
+            "structured_outputs": {"supported": true},
+            "thinking": {
+                "supported": true,
+                "types": {
+                    "adaptive": {"supported": true},
+                    "enabled": {"supported": true}
+                }
+            }
+        });
+        let caps: ModelCapabilities = serde_json::from_value(raw).unwrap();
+        assert!(caps.batch.supported);
+        assert!(caps.context_management.supported);
+        assert_eq!(
+            caps.context_management
+                .clear_thinking_20251015
+                .map(|c| c.supported),
+            Some(true),
+        );
+        assert!(caps.effort.high.supported);
+        assert!(caps.effort.xhigh.is_none(), "xhigh absent on this model");
+        assert!(caps.thinking.types.adaptive.supported);
+    }
+
+    #[test]
+    fn model_capabilities_tolerates_optional_strategy_fields_missing() {
+        // A model that doesn't expose the dated context-management
+        // strategy fields should still decode.
+        let raw = json!({
+            "batch": {"supported": false},
+            "citations": {"supported": false},
+            "code_execution": {"supported": false},
+            "context_management": {"supported": false},
+            "effort": {
+                "high": {"supported": false},
+                "low": {"supported": false},
+                "max": {"supported": false},
+                "medium": {"supported": false},
+                "supported": false
+            },
+            "image_input": {"supported": false},
+            "pdf_input": {"supported": false},
+            "structured_outputs": {"supported": false},
+            "thinking": {
+                "supported": false,
+                "types": {
+                    "adaptive": {"supported": false},
+                    "enabled": {"supported": false}
+                }
+            }
+        });
+        let caps: ModelCapabilities = serde_json::from_value(raw).unwrap();
+        assert!(caps.context_management.clear_thinking_20251015.is_none());
+        assert!(caps.context_management.clear_tool_uses_20250919.is_none());
+        assert!(caps.context_management.compact_20260112.is_none());
+    }
+
+    #[test]
+    fn effort_capability_decodes_xhigh_when_present() {
+        let raw = json!({
+            "supported": true,
+            "low": {"supported": true},
+            "medium": {"supported": true},
+            "high": {"supported": true},
+            "max": {"supported": true},
+            "xhigh": {"supported": true}
+        });
+        let e: EffortCapability = serde_json::from_value(raw).unwrap();
+        assert_eq!(e.xhigh.map(|c| c.supported), Some(true));
+    }
+
+    #[test]
+    fn model_info_with_capabilities_round_trips() {
+        let raw = json!({
+            "type": "model",
+            "id": "claude-sonnet-4-6",
+            "display_name": "Claude Sonnet 4.6",
+            "created_at": "2025-09-29T00:00:00Z",
+            "max_tokens": 64_000,
+            "max_input_tokens": 200_000,
+            "capabilities": {
+                "batch": {"supported": true},
+                "citations": {"supported": true},
+                "code_execution": {"supported": true},
+                "context_management": {"supported": true},
+                "effort": {
+                    "high": {"supported": true},
+                    "low": {"supported": true},
+                    "max": {"supported": true},
+                    "medium": {"supported": true},
+                    "supported": true
+                },
+                "image_input": {"supported": true},
+                "pdf_input": {"supported": true},
+                "structured_outputs": {"supported": true},
+                "thinking": {
+                    "supported": true,
+                    "types": {
+                        "adaptive": {"supported": true},
+                        "enabled": {"supported": true}
+                    }
+                }
+            }
+        });
+        let m: ModelInfo = serde_json::from_value(raw).unwrap();
+        let caps = m.capabilities.unwrap();
+        assert!(caps.thinking.supported);
+        assert_eq!(m.max_tokens, Some(64_000));
     }
 }
