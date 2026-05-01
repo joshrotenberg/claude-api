@@ -1,7 +1,7 @@
 //! Live recording proxy for `claude-api-test`.
 //!
 //! [`Recorder`] runs an in-process HTTP forwarder on `127.0.0.1` that
-//! captures every request a [`claude_api::Client`] sends through it,
+//! captures every request a `claude_api::Client` sends through it,
 //! tees the exchange to a JSONL cassette file, and returns the upstream
 //! response unchanged. Pair with [`mount_cassette`](crate::mount_cassette)
 //! and [`Cassette::from_path`](crate::Cassette::from_path) for replay.

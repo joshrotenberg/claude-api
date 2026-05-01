@@ -20,7 +20,7 @@
 //! Every method automatically sends
 //! `anthropic-beta: user-profiles-2026-03-24`
 //! ([`BetaHeader::UserProfiles`](crate::BetaHeader::UserProfiles)).
-//! Override the beta version on the [`Client`](crate::Client) builder
+//! Override the beta version on the [`Client`] builder
 //! if a newer revision is current.
 //!
 //! # Endpoints

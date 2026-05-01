@@ -390,7 +390,8 @@ pub struct UpdateSessionRequest {
     /// unchanged.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
-    /// Per-key metadata patch. See [`MetadataPatch`].
+    /// Per-key metadata patch. See
+    /// [`MetadataPatch`](super::agents::MetadataPatch).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<super::agents::MetadataPatch>,
     /// Replace the vault attachments. **Currently rejected by the

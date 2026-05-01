@@ -3,7 +3,7 @@
 //! Managed Agents lets you provision long-running agent sessions backed by
 //! Anthropic-managed compute environments, persistent memory stores, and
 //! credential vaults. Each session references a versioned agent and an
-//! environment, drives a [stream of events](crate::managed_agents::sessions::events),
+//! environment, drives a [stream of events](crate::managed_agents::events),
 //! and may produce outputs as files.
 //!
 //! # Beta status

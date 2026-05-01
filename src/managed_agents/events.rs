@@ -152,8 +152,8 @@ pub enum KnownSessionEvent {
     /// Result of an MCP tool execution.
     #[serde(rename = "agent.mcp_tool_result")]
     AgentMcpToolResult(AgentMcpToolResultEvent),
-    /// Agent invokes one of your custom tools. Respond with
-    /// [`UserCustomToolResult`].
+    /// Agent invokes one of your custom tools. Respond with an
+    /// [`OutgoingUserEvent::CustomToolResult`].
     #[serde(rename = "agent.custom_tool_use")]
     AgentCustomToolUse(AgentCustomToolUseEvent),
     /// Conversation history was compacted.
@@ -365,7 +365,8 @@ pub type AgentMcpToolUseEvent = AgentToolUseEvent;
 pub type AgentMcpToolResultEvent = AgentToolResultEvent;
 
 /// `agent.custom_tool_use`: agent invokes one of the caller's custom
-/// tools. The session pauses; respond with [`UserCustomToolResult`].
+/// tools. The session pauses; respond with an
+/// [`OutgoingUserEvent::CustomToolResult`].
 pub type AgentCustomToolUseEvent = AgentToolUseEvent;
 
 /// `session.thread_created`. Carries the new thread's ID and the
@@ -665,7 +666,7 @@ pub enum OutcomeRubric {
 // Send-events request shape
 // =====================================================================
 
-/// One event included in a [`Sessions::events_send`] call.
+/// One event included in a [`Events::send`] call.
 ///
 /// This is the *outgoing* form -- the user-event variants only. For the
 /// echoed / received form (which can also carry agent / session / span
@@ -842,8 +843,7 @@ impl Events<'_> {
             .await
     }
 
-    /// `GET /v1/sessions/{id}/stream`. Returns an
-    /// [`EventStream`](crate::managed_agents::events::EventStream)
+    /// `GET /v1/sessions/{id}/stream`. Returns an [`EventStream`]
     /// yielding [`SessionEvent`]s as they're emitted server-side.
     ///
     /// **Open the stream before sending events** to avoid a race: only
