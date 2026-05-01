@@ -1,0 +1,33 @@
+# release-plz configuration.
+# Reference: https://release-plz.dev/docs/config
+#
+# Conventional-commit messages on `main` produce a release PR. Merging
+# the release PR triggers `cargo publish` (in dependency order) and
+# creates a per-crate GitHub release + git tag.
+
+[workspace]
+changelog_update = true
+git_release_enable = true
+git_tag_enable = true
+pr_labels = ["release"]
+pr_draft = false
+publish_allow_dirty = false
+publish_no_verify = false
+publish_timeout = "10m"
+semver_check = true
+
+# Headline crate: tag as `v{{ version }}` so the SDK release shows
+# up cleanly in the GitHub releases list.
+[[package]]
+name = "claude-api"
+git_tag_name = "v{{ version }}"
+
+# Sub-crates get prefixed tags so their releases don't collide with
+# the headline crate's `v0.x.y` namespace.
+[[package]]
+name = "claude-api-derive"
+git_tag_name = "claude-api-derive-v{{ version }}"
+
+[[package]]
+name = "claude-api-test"
+git_tag_name = "claude-api-test-v{{ version }}"
