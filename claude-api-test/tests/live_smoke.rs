@@ -12,13 +12,28 @@
 //!   tokens** -- each test is bounded to single-digit `max_tokens`
 //!   when applicable.
 //!
-//! Workflow to refresh a cassette:
+//! Workflow to refresh non-admin cassettes:
 //!
 //! ```text
 //! ANTHROPIC_API_KEY=sk-ant-... CLAUDE_API_LIVE=1 \
-//!     cargo test -p claude-api-test --test live_smoke
+//!     cargo test -p claude-api-test --test live_smoke -- \
+//!     --skip live_admin
 //! git add claude-api-test/tests/cassettes/live_*.jsonl
 //! ```
+//!
+//! Workflow to refresh admin cassettes (requires an admin-tier API
+//! key, distinct from the regular key):
+//!
+//! ```text
+//! ANTHROPIC_ADMIN_API_KEY=sk-ant-admin-... CLAUDE_API_LIVE=1 \
+//!     cargo test -p claude-api-test --test live_smoke -- live_admin
+//! ```
+//!
+//! The admin tests filter responses through the same redactor, but
+//! note: the api_keys.list response legitimately contains
+//! `partial_key_hint` fields (e.g. `sk-ant-api03-XXXX...YYYY`).
+//! These are public-by-design 8-char key fingerprints, not full
+//! secrets, and are safe to commit.
 //!
 //! If a cassette is missing in replay mode the test is skipped with
 //! an informative message (not failed) so CI stays green for any
@@ -48,12 +63,28 @@ const ENV_LIVE: &str = "CLAUDE_API_LIVE";
 const UPSTREAM: &str = "https://api.anthropic.com";
 
 /// Drive a `claude_api::Client` through either the recorder (record
-/// mode) or a wiremock-mounted cassette (replay mode).
-///
-/// `body` is the test logic; it receives a configured `Client` whose
-/// requests either go to `api.anthropic.com` (record) or to a local
-/// cassette server (replay). All assertions live inside `body`.
+/// mode) or a wiremock-mounted cassette (replay mode). Uses the
+/// regular API key.
 async fn record_or_replay<F, Fut>(name: &str, body: F)
+where
+    F: FnOnce(Client) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    record_or_replay_with_key("ANTHROPIC_API_KEY", name, body).await;
+}
+
+/// Same as [`record_or_replay`] but uses the admin API key
+/// (`ANTHROPIC_ADMIN_API_KEY`). Admin endpoints reject regular keys
+/// with a 401, so admin live tests must source the admin-tier key.
+async fn record_or_replay_admin<F, Fut>(name: &str, body: F)
+where
+    F: FnOnce(Client) -> Fut,
+    Fut: Future<Output = ()>,
+{
+    record_or_replay_with_key("ANTHROPIC_ADMIN_API_KEY", name, body).await;
+}
+
+async fn record_or_replay_with_key<F, Fut>(env_var: &str, name: &str, body: F)
 where
     F: FnOnce(Client) -> Fut,
     Fut: Future<Output = ()>,
@@ -63,7 +94,7 @@ where
     if std::env::var(ENV_LIVE).is_ok() {
         // ---------- Record mode ----------
         let api_key =
-            std::env::var("ANTHROPIC_API_KEY").expect("ANTHROPIC_API_KEY required for live mode");
+            std::env::var(env_var).unwrap_or_else(|_| panic!("{env_var} required for live mode"));
         let recorder = Recorder::start(RecorderConfig {
             upstream: UPSTREAM.to_owned(),
             cassette_path: cassette_path.clone(),
@@ -417,6 +448,100 @@ async fn live_managed_agents_full_cycle() {
             .environments()
             .archive(&env.id)
             .await;
+    })
+    .await;
+}
+
+// =====================================================================
+// Tier 4: admin (read-only)
+// =====================================================================
+//
+// Admin endpoints require an admin-tier API key, distinct from the
+// regular key. Use `record_or_replay_admin` so record mode sources
+// `ANTHROPIC_ADMIN_API_KEY` instead of `ANTHROPIC_API_KEY`.
+
+#[tokio::test]
+async fn live_admin_organization_me() {
+    record_or_replay_admin("admin_organization_me", |client| async move {
+        let org = client
+            .admin()
+            .organization()
+            .me()
+            .await
+            .expect("organization me");
+        assert!(!org.id.is_empty(), "org id empty");
+        assert!(!org.name.is_empty(), "org name empty");
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn live_admin_users_list() {
+    record_or_replay_admin("admin_users_list", |client| async move {
+        let page = client
+            .admin()
+            .users()
+            .list(claude_api::admin::users::ListUsersParams::default())
+            .await
+            .expect("users list");
+        // Org has at least one user (the caller).
+        assert!(!page.data.is_empty());
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn live_admin_workspaces_list() {
+    record_or_replay_admin("admin_workspaces_list", |client| async move {
+        let page = client
+            .admin()
+            .workspaces()
+            .list(claude_api::admin::workspaces::ListWorkspacesParams::default())
+            .await
+            .expect("workspaces list");
+        let _ = page.data.len();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn live_admin_api_keys_list() {
+    record_or_replay_admin("admin_api_keys_list", |client| async move {
+        let page = client
+            .admin()
+            .api_keys()
+            .list(claude_api::admin::api_keys::ListApiKeysParams::default())
+            .await
+            .expect("api keys list");
+        let _ = page.data.len();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn live_admin_invites_list() {
+    record_or_replay_admin("admin_invites_list", |client| async move {
+        let page = client
+            .admin()
+            .invites()
+            .list(claude_api::admin::ListParams::default())
+            .await
+            .expect("invites list");
+        let _ = page.data.len();
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn live_admin_rate_limits_org() {
+    record_or_replay_admin("admin_rate_limits_org", |client| async move {
+        let page = client
+            .admin()
+            .rate_limits()
+            .list_organization(claude_api::admin::rate_limits::ListOrgRateLimitsParams::default())
+            .await
+            .expect("rate limits org");
+        let _ = page.data.len();
     })
     .await;
 }
