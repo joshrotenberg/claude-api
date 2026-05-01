@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.5.1](https://github.com/joshrotenberg/claude-api/compare/v0.5.0...v0.5.1) - 2026-05-01
+
+### Other
+
+- regenerate changelog ([#18](https://github.com/joshrotenberg/claude-api/pull/18))
+
 ## [0.5.0] - 2026-05-01
 
 ### Bug Fixes
