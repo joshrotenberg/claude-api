@@ -1,0 +1,36 @@
+[package]
+name = "claude-api-test"
+version = "0.5.0"
+description = "Test utilities for claude-api: cassette-based replay of recorded HTTP exchanges"
+documentation = "https://docs.rs/claude-api-test"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+wiremock = { workspace = true }
+tokio = { workspace = true, features = ["fs", "rt", "net", "macros", "sync", "io-util"] }
+http = { workspace = true }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+reqwest = { workspace = true, features = ["rustls-tls"] }
+bytes = { workspace = true }
+
+[dev-dependencies]
+claude-api = { version = "0.5.0", path = "../claude-api", default-features = false, features = ["async", "rustls", "streaming", "skills", "user-profiles", "managed-agents-preview", "admin"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+pretty_assertions = { workspace = true }
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"

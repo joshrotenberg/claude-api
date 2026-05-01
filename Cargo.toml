@@ -1,143 +1,34 @@
 [workspace]
-members = [".", "claude-api-derive", "claude-api-test"]
+members = [
+    "crates/claude-api",
+    "crates/claude-api-derive",
+    "crates/claude-api-test",
+]
+resolver = "2"
 
-[package]
-name = "claude-api"
-version = "0.5.0"
-edition = "2021"
-rust-version = "1.82"
-description = "Type-safe Rust client for the Anthropic API"
+[workspace.package]
+edition = "2024"
+rust-version = "1.90"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/joshrotenberg/claude-api"
-keywords = ["anthropic", "claude", "api", "ai", "llm"]
-categories = ["api-bindings", "asynchronous"]
-readme = "README.md"
-documentation = "https://docs.rs/claude-api"
 
-[features]
-default = ["async", "rustls", "streaming"]
+[workspace.dependencies]
+# Cross-cutting deps used by 2+ crates. Single-crate deps stay in the
+# crate's own [dependencies] block.
 
-async = [
-    "dep:tokio",
-    "dep:reqwest",
-    "dep:async-trait",
-    "dep:futures-util",
-    "dep:bytes",
-    "dep:tokio-util",
-    "reqwest?/stream",
-    "reqwest?/multipart",
-]
-sync = ["dep:reqwest", "reqwest?/blocking"]
-
-rustls = ["reqwest?/rustls-tls"]
-native-tls = ["reqwest?/native-tls"]
-
-streaming = ["dep:eventsource-stream"]
-
-schemars-tools = ["dep:schemars"]
-
-derive = ["dep:claude-api-derive", "schemars-tools", "async"]
-
-bedrock = ["dep:aws-sigv4", "dep:aws-credential-types"]
-vertex = ["dep:gcp_auth"]
-
-admin = ["async"]
-skills = ["async"]
-user-profiles = ["async"]
-managed-agents = []
-managed-agents-preview = ["async"]
-pricing = []
-conversation = ["async"]
-
-[dependencies]
+# Serialization
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0"
-tracing = "0.1"
+
+# HTTP
 http = "1.1"
+reqwest = { version = "0.12", default-features = false }
+bytes = "1"
 
-tokio = { version = "1", features = ["time", "sync"], optional = true }
-tokio-util = { version = "0.7", features = ["io", "rt"], optional = true }
-reqwest = { version = "0.12", default-features = false, features = ["json"], optional = true }
-async-trait = { version = "0.1", optional = true }
-
-eventsource-stream = { version = "0.2", optional = true }
-futures-util = { version = "0.3", optional = true }
-bytes = { version = "1", optional = true }
-
-schemars = { version = "0.8", optional = true }
-
-aws-sigv4 = { version = "1", optional = true }
-aws-credential-types = { version = "1", optional = true }
-gcp_auth = { version = "0.12", optional = true }
-
-claude-api-derive = { version = "0.5.0", path = "claude-api-derive", optional = true }
-
-[build-dependencies]
-serde = { version = "1.0", features = ["derive"] }
-toml = { version = "0.8", default-features = false, features = ["parse"] }
-
-[dev-dependencies]
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
-wiremock = "0.6"
-pretty_assertions = "1.4"
-serde_json = "1.0"
+# Async
+tokio = { version = "1" }
 futures-util = "0.3"
 
-[[example]]
-name = "basic"
-required-features = ["async"]
-
-[[example]]
-name = "streaming"
-required-features = ["async", "streaming"]
-
-[[example]]
-name = "streaming_callbacks"
-required-features = ["async", "streaming"]
-
-[[example]]
-name = "tool_use"
-required-features = ["async"]
-
-[[example]]
-name = "vision"
-required-features = ["async"]
-
-[[example]]
-name = "document"
-required-features = ["async"]
-
-[[example]]
-name = "conversation"
-required-features = ["async", "conversation", "pricing"]
-
-[[example]]
-name = "agent_loop"
-required-features = ["async", "conversation"]
-
-[[example]]
-name = "typed_tools"
-required-features = ["async", "conversation", "schemars-tools"]
-
-[[example]]
-name = "derived_tool"
-required-features = ["async", "conversation", "derive"]
-
-[[example]]
-name = "blocking"
-required-features = ["sync"]
-
-[lints.rust]
-unsafe_code = "forbid"
-missing_docs = "warn"
-
-[lints.clippy]
-pedantic = { level = "warn", priority = -1 }
-module_name_repetitions = "allow"
-must_use_candidate = "allow"
-missing_errors_doc = "allow"
-
-[package.metadata.docs.rs]
-all-features = true
-rustdoc-args = ["--cfg", "docsrs"]
+# Test
+wiremock = "0.6"
+pretty_assertions = "1.4"

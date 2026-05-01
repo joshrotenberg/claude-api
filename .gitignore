@@ -10,3 +10,6 @@ CLAUDE.md
 # tools/audit/spec_diff.sh; AUDIT.md is scratch for the audit pass.
 AUDIT.md
 AUDIT_DIFF.md
+
+# Internal tooling (spec-diff, etc). Reachable per-developer; not published.
+tools/
