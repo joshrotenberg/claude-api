@@ -23,6 +23,24 @@ pub struct FileMetadata {
     /// [`Files::download`](super::api::Files::download).
     #[serde(default)]
     pub downloadable: bool,
+    /// Scoping resource (e.g. session this file is bound to). `None`
+    /// for workspace-scoped files.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scope: Option<FileScope>,
+}
+
+/// Scoping resource for a [`FileMetadata`]. Currently the only
+/// supported scope is a session: files written by an agent under
+/// `/mnt/session/outputs/` are session-scoped and listable via the
+/// `?scope_id={session_id}` query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct FileScope {
+    /// Scope discriminator. Currently `"session"`.
+    #[serde(rename = "type")]
+    pub kind: String,
+    /// ID of the scoping resource (e.g. the session ID).
+    pub id: String,
 }
 
 fn default_file_kind() -> String {

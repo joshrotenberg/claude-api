@@ -33,9 +33,25 @@ pub struct Message {
     /// The stop sequence that triggered termination, if applicable.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_sequence: Option<String>,
+    /// Structured information about *why* the model stopped (e.g. for
+    /// `refusal` stops, the policy category and an explanation). `None`
+    /// when no extra detail is reported.
+    ///
+    /// TODO: type as a closed enum once more `stop_details` shapes are
+    /// public. Currently preserved as raw JSON for forward-compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stop_details: Option<serde_json::Value>,
     /// Token usage and related counters.
     #[serde(default)]
     pub usage: Usage,
+    /// Information about context-management edits applied to the
+    /// request (e.g. trimmed history). Present only when
+    /// `context-management-2025-06-27` is in play.
+    ///
+    /// TODO: type as `BetaResponseContextManagement` once the shape
+    /// stabilizes. Currently preserved as raw JSON.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context_management: Option<serde_json::Value>,
     /// Container metadata, present when the request used the code-execution
     /// container tool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -165,11 +181,13 @@ mod tests {
             model: ModelId::HAIKU_4_5,
             stop_reason: Some(StopReason::ToolUse),
             stop_sequence: None,
+            stop_details: None,
             usage: Usage {
                 input_tokens: 7,
                 output_tokens: 3,
                 ..Usage::default()
             },
+            context_management: None,
             container: None,
         };
 

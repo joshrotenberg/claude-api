@@ -26,6 +26,11 @@ use crate::messages::content::KnownBlock;
 ///
 /// Forward-compatible wrapper around [`KnownStreamEvent`]; unknown event types
 /// land in [`StreamEvent::Other`] preserving the raw JSON.
+//
+// Suppress `large_enum_variant`: boxing Known would break pattern-match
+// ergonomics. Worth revisiting in a v1.0 release that's free to break the
+// stream-event API.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
     /// An event whose `type` is recognized by this SDK version.
@@ -35,6 +40,7 @@ pub enum StreamEvent {
 }
 
 /// All streaming event types known to this SDK version.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]

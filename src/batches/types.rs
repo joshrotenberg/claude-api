@@ -118,6 +118,7 @@ pub struct BatchResultItem {
 }
 
 /// What happened to a batch entry.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 #[non_exhaustive]

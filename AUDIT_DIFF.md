@@ -10,18 +10,14 @@ Legend: `✓` = exact match. Otherwise the section lists the diff.
 
 ## Summary
 
-17 / 28 pairs match exactly.
+21 / 28 pairs match exactly.
 
 Mismatches or warnings:
 - `src/managed_agents/sessions.rs:Session:BetaManagedAgentsSession`
-- `src/managed_agents/sessions.rs:SessionUsage:BetaManagedAgentsSessionUsage`
 - `src/managed_agents/agents.rs:Agent:BetaManagedAgentsAgent`
 - `src/managed_agents/resources.rs:FileResource:BetaManagedAgentsFileResource`
 - `src/managed_agents/resources.rs:GitHubRepositoryResource:BetaManagedAgentsGitHubRepositoryResource`
 - `src/managed_agents/resources.rs:MemoryStoreResource:BetaManagedAgentsMemoryStoreResource`
-- `src/messages/response.rs:Message:BetaMessage`
-- `src/files/types.rs:FileMetadata:BetaFileMetadataSchema`
-- `src/models/mod.rs:ModelInfo:BetaModelInfo`
 - `src/managed_agents/events.rs:AgentToolUseEvent:BetaManagedAgentsAgentToolUseEvent`
 - `src/managed_agents/events.rs:SpanModelRequestEndEvent:BetaManagedAgentsSpanModelRequestEndEvent`
 
@@ -33,15 +29,7 @@ Mismatches or warnings:
 
 - `outcome_evaluations`
 
-### `SessionUsage` — `BetaManagedAgentsSessionUsage`  (rust=4, spec=4, shared=3)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `cache_creation`
-
-**Extra in Rust** (in our struct but not in spec):
-
-- `cache_creation_input_tokens`
+### `SessionUsage` — `BetaManagedAgentsSessionUsage`  ✓ (4/4)
 
 ### `Agent` — `BetaManagedAgentsAgent`  (rust=15, spec=14, shared=14)
 
@@ -95,28 +83,13 @@ Mismatches or warnings:
 
 - `id`
 
-### `Message` — `BetaMessage`  (rust=9, spec=11, shared=9)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `context_management`
-- `stop_details`
+### `Message` — `BetaMessage`  ✓ (11/11)
 
 ### `MessageBatch` — `BetaMessageBatch`  ✓ (10/10)
 
-### `FileMetadata` — `BetaFileMetadataSchema`  (rust=7, spec=8, shared=7)
+### `FileMetadata` — `BetaFileMetadataSchema`  ✓ (8/8)
 
-**Missing in Rust** (in spec but not in our struct):
-
-- `scope`
-
-### `ModelInfo` — `BetaModelInfo`  (rust=4, spec=7, shared=4)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `capabilities`
-- `max_input_tokens`
-- `max_tokens`
+### `ModelInfo` — `BetaModelInfo`  ✓ (7/7)
 
 ### `Skill` — `BetaGetSkillResponse`  ✓ (7/7)
 

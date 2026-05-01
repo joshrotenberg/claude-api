@@ -97,12 +97,24 @@ pub struct SessionUsage {
     /// Total output tokens across all model calls.
     #[serde(default)]
     pub output_tokens: u64,
-    /// Tokens written to the prompt cache.
-    #[serde(default)]
-    pub cache_creation_input_tokens: u64,
+    /// Tokens written to the prompt cache, broken down by cache TTL.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cache_creation: Option<CacheCreationUsage>,
     /// Tokens served from the prompt cache (cheaper read path).
     #[serde(default)]
     pub cache_read_input_tokens: u64,
+}
+
+/// Prompt-cache write tokens, split by ephemeral TTL.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct CacheCreationUsage {
+    /// Tokens used to create 5-minute ephemeral cache entries.
+    #[serde(default)]
+    pub ephemeral_5m_input_tokens: u64,
+    /// Tokens used to create 1-hour ephemeral cache entries.
+    #[serde(default)]
+    pub ephemeral_1h_input_tokens: u64,
 }
 
 /// A Managed Agents session.

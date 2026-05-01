@@ -19,6 +19,19 @@ pub struct ModelInfo {
     /// Wire `type` discriminant; always `"model"`.
     #[serde(rename = "type", default = "default_model_kind")]
     pub kind: String,
+    /// Maximum total tokens (input + output) the model can produce in
+    /// a single response.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    /// Maximum input tokens the model can accept.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_input_tokens: Option<u64>,
+    /// Capability matrix: which features (citations, code execution,
+    /// thinking, image input, etc.) the model supports and at what
+    /// level. Currently preserved as raw JSON; promote to a typed
+    /// `BetaModelCapabilities` struct in a future revision.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub capabilities: Option<serde_json::Value>,
 }
 
 fn default_model_kind() -> String {
