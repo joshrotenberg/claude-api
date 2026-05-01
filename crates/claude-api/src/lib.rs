@@ -75,7 +75,7 @@
 //!
 //! Every wire-level discriminated union has an `Other` arm:
 //!
-//! - [`messages::ContentBlock`] -- text / image / tool_use /
+//! - [`messages::ContentBlock`] -- text / image / `tool_use` /
 //!   thinking / ... / `Other(Value)`
 //! - [`messages::KnownBlock`] -- the typed variants
 //! - [`messages::stream::StreamEvent`] -- SSE events
