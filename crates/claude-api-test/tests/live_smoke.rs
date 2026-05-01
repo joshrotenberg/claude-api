@@ -178,6 +178,16 @@ async fn live_models_get_sonnet_4_6() {
         assert_eq!(m.id.as_str(), "claude-sonnet-4-6");
         assert_eq!(m.kind, "model");
         assert!(!m.display_name.is_empty());
+
+        // Capability matrix should be present and decode into the
+        // typed shape (no Value fallback).
+        let caps = m.capabilities.as_ref().expect("capabilities present");
+        assert!(caps.batch.supported);
+        assert!(caps.citations.supported);
+        assert!(caps.image_input.supported);
+        assert!(caps.thinking.supported);
+        assert!(caps.thinking.types.adaptive.supported);
+        assert!(caps.effort.supported);
     })
     .await;
 }
