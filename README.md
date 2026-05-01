@@ -138,19 +138,6 @@ Disable defaults if you only want the type definitions:
 claude-api = { version = "0.5", default-features = false }
 ```
 
-## Anti-goals
-
-If a feature request comes in for any of these, the answer is "different
-crate":
-
-- Local prompt templating
-- Multi-provider routing (OpenAI, Gemini, etc.)
-- Response caching layer
-- Background queues or scheduling
-- Vector store integrations
-- Embedding API (Anthropic does not have one; do not stub)
-- Legacy `/v1/complete` Completions API
-
 ## Resources
 
 - [Examples](crates/claude-api/examples/)
