@@ -1,0 +1,631 @@
+//! Sessions: provision, retrieve, list, archive, delete.
+//!
+//! A session is a running agent instance within an environment. Each
+//! session references an [agent](super::agents) (by ID or pinned to a
+//! version) and an environment, and maintains conversation history
+//! across multiple interactions.
+
+use serde::{Deserialize, Serialize};
+
+use crate::client::Client;
+use crate::error::Result;
+use crate::pagination::Paginated;
+
+use super::MANAGED_AGENTS_BETA;
+
+/// Session lifecycle status.
+///
+/// Sessions start in [`Idle`](Self::Idle), transition to
+/// [`Running`](Self::Running) while processing, and may briefly
+/// [`Rescheduling`](Self::Rescheduling) on transient retries.
+/// [`Terminated`](Self::Terminated) is terminal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum SessionStatus {
+    /// Agent is waiting for input. Sessions start in this state.
+    Idle,
+    /// Agent is actively executing.
+    Running,
+    /// Transient error occurred; session is retrying automatically.
+    Rescheduling,
+    /// Session has ended due to an unrecoverable error.
+    Terminated,
+}
+
+/// Reference to an agent: either a string ID (latest version) or a
+/// pinned `{type, id, version}` object.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+#[non_exhaustive]
+pub enum AgentRef {
+    /// Bare ID; resolves to the latest published version of the agent.
+    Latest(String),
+    /// Pinned to a specific version.
+    Pinned {
+        /// Always `"agent"`.
+        #[serde(rename = "type")]
+        ty: String,
+        /// Agent ID.
+        id: String,
+        /// Agent version number.
+        version: u32,
+    },
+}
+
+impl AgentRef {
+    /// Build an [`AgentRef::Latest`].
+    #[must_use]
+    pub fn latest(id: impl Into<String>) -> Self {
+        Self::Latest(id.into())
+    }
+
+    /// Build an [`AgentRef::Pinned`] for a specific version.
+    #[must_use]
+    pub fn pinned(id: impl Into<String>, version: u32) -> Self {
+        Self::Pinned {
+            ty: "agent".into(),
+            id: id.into(),
+            version,
+        }
+    }
+}
+
+impl From<&str> for AgentRef {
+    fn from(s: &str) -> Self {
+        Self::latest(s)
+    }
+}
+
+impl From<String> for AgentRef {
+    fn from(s: String) -> Self {
+        Self::latest(s)
+    }
+}
+
+/// Cumulative token usage on a session.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct SessionUsage {
+    /// Uncached input tokens billed across all model calls.
+    #[serde(default)]
+    pub input_tokens: u64,
+    /// Total output tokens across all model calls.
+    #[serde(default)]
+    pub output_tokens: u64,
+    /// Tokens written to the prompt cache.
+    #[serde(default)]
+    pub cache_creation_input_tokens: u64,
+    /// Tokens served from the prompt cache (cheaper read path).
+    #[serde(default)]
+    pub cache_read_input_tokens: u64,
+}
+
+/// A Managed Agents session.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct Session {
+    /// Stable session identifier (`sesn_...`).
+    pub id: String,
+    /// Lifecycle status.
+    pub status: SessionStatus,
+    /// Optional human-readable title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    /// Cumulative token usage. May be absent on freshly-created sessions.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub usage: Option<SessionUsage>,
+    /// Per-resource raw payloads: file mounts, repository mounts, memory
+    /// store mounts. Typed access lands in stage 6; preserved as
+    /// `Vec<Value>` here so the create/retrieve round-trip works
+    /// regardless.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<serde_json::Value>,
+    /// Outcome evaluations recorded against this session, when an
+    /// outcome was defined. Preserved as `Vec<Value>` until the
+    /// outcomes types land.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub outcome_evaluations: Vec<serde_json::Value>,
+    /// Timestamp when the session was created (RFC3339 / ISO 8601).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_at: Option<String>,
+    /// Timestamp of the most recent update.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub updated_at: Option<String>,
+    /// Set when the session has been archived.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub archived_at: Option<String>,
+}
+
+/// Request body for `POST /v1/sessions`.
+///
+/// Build via [`CreateSessionRequest::builder`].
+#[derive(Debug, Clone, Serialize)]
+#[non_exhaustive]
+pub struct CreateSessionRequest {
+    /// The agent driving this session. May be a bare ID string (latest
+    /// version) or a pinned [`AgentRef::Pinned`].
+    pub agent: AgentRef,
+    /// Environment the session runs in.
+    pub environment_id: String,
+    /// Optional vault references for MCP credential resolution.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub vault_ids: Vec<String>,
+    /// Optional resources mounted into the session container at creation
+    /// time (file uploads, GitHub repositories, memory stores).
+    /// Preserved as raw JSON until stage 6 lands a typed surface.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<serde_json::Value>,
+    /// Optional human-readable title.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+}
+
+impl CreateSessionRequest {
+    /// Begin configuring a request.
+    #[must_use]
+    pub fn builder() -> CreateSessionRequestBuilder {
+        CreateSessionRequestBuilder::default()
+    }
+}
+
+/// Builder for [`CreateSessionRequest`].
+#[derive(Debug, Default)]
+pub struct CreateSessionRequestBuilder {
+    agent: Option<AgentRef>,
+    environment_id: Option<String>,
+    vault_ids: Vec<String>,
+    resources: Vec<serde_json::Value>,
+    title: Option<String>,
+}
+
+impl CreateSessionRequestBuilder {
+    /// Set the agent. Required.
+    #[must_use]
+    pub fn agent(mut self, agent: impl Into<AgentRef>) -> Self {
+        self.agent = Some(agent.into());
+        self
+    }
+
+    /// Set the environment. Required.
+    #[must_use]
+    pub fn environment_id(mut self, id: impl Into<String>) -> Self {
+        self.environment_id = Some(id.into());
+        self
+    }
+
+    /// Append a vault ID for credential resolution.
+    #[must_use]
+    pub fn vault_id(mut self, id: impl Into<String>) -> Self {
+        self.vault_ids.push(id.into());
+        self
+    }
+
+    /// Set the full vault list.
+    #[must_use]
+    pub fn vault_ids(mut self, ids: Vec<String>) -> Self {
+        self.vault_ids = ids;
+        self
+    }
+
+    /// Append a raw resource entry (file / `github_repository` /
+    /// `memory_store`). Typed builders for these land in stage 6.
+    #[must_use]
+    pub fn resource(mut self, resource: serde_json::Value) -> Self {
+        self.resources.push(resource);
+        self
+    }
+
+    /// Set a human-readable title.
+    #[must_use]
+    pub fn title(mut self, title: impl Into<String>) -> Self {
+        self.title = Some(title.into());
+        self
+    }
+
+    /// Finalize.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::InvalidConfig`](crate::Error::InvalidConfig)
+    /// if `agent` or `environment_id` was not set.
+    pub fn build(self) -> Result<CreateSessionRequest> {
+        let agent = self
+            .agent
+            .ok_or_else(|| crate::Error::InvalidConfig("agent is required".into()))?;
+        let environment_id = self
+            .environment_id
+            .ok_or_else(|| crate::Error::InvalidConfig("environment_id is required".into()))?;
+        Ok(CreateSessionRequest {
+            agent,
+            environment_id,
+            vault_ids: self.vault_ids,
+            resources: self.resources,
+            title: self.title,
+        })
+    }
+}
+
+/// Optional knobs for [`Sessions::list`].
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct ListSessionsParams {
+    /// Pagination cursor: results after this session ID.
+    pub after: Option<String>,
+    /// Pagination cursor: results before this session ID.
+    pub before: Option<String>,
+    /// Page size limit.
+    pub limit: Option<u32>,
+    /// Whether to include archived sessions.
+    pub include_archived: Option<bool>,
+}
+
+impl ListSessionsParams {
+    fn to_query(&self) -> Vec<(&'static str, String)> {
+        let mut q = Vec::new();
+        if let Some(a) = &self.after {
+            q.push(("after", a.clone()));
+        }
+        if let Some(b) = &self.before {
+            q.push(("before", b.clone()));
+        }
+        if let Some(l) = self.limit {
+            q.push(("limit", l.to_string()));
+        }
+        if let Some(ia) = self.include_archived {
+            q.push(("include_archived", ia.to_string()));
+        }
+        q
+    }
+}
+
+/// Namespace handle for the Sessions API.
+///
+/// Obtained via [`Client::managed_agents`](Client::managed_agents).
+pub struct Sessions<'a> {
+    client: &'a Client,
+}
+
+impl<'a> Sessions<'a> {
+    pub(crate) fn new(client: &'a Client) -> Self {
+        Self { client }
+    }
+
+    /// Create a session. Returns the freshly-provisioned [`Session`].
+    pub async fn create(&self, request: CreateSessionRequest) -> Result<Session> {
+        let request_ref = &request;
+        self.client
+            .execute_with_retry(
+                || {
+                    self.client
+                        .request_builder(reqwest::Method::POST, "/v1/sessions")
+                        .json(request_ref)
+                },
+                &[MANAGED_AGENTS_BETA],
+            )
+            .await
+    }
+
+    /// Fetch a session by ID.
+    pub async fn retrieve(&self, session_id: &str) -> Result<Session> {
+        let path = format!("/v1/sessions/{session_id}");
+        self.client
+            .execute_with_retry(
+                || self.client.request_builder(reqwest::Method::GET, &path),
+                &[MANAGED_AGENTS_BETA],
+            )
+            .await
+    }
+
+    /// List sessions, paginated.
+    pub async fn list(&self, params: ListSessionsParams) -> Result<Paginated<Session>> {
+        let query = params.to_query();
+        self.client
+            .execute_with_retry(
+                || {
+                    let mut req = self
+                        .client
+                        .request_builder(reqwest::Method::GET, "/v1/sessions");
+                    for (k, v) in &query {
+                        req = req.query(&[(k, v)]);
+                    }
+                    req
+                },
+                &[MANAGED_AGENTS_BETA],
+            )
+            .await
+    }
+
+    /// Archive a session. Archived sessions cannot accept new events but
+    /// preserve their event history.
+    pub async fn archive(&self, session_id: &str) -> Result<Session> {
+        let path = format!("/v1/sessions/{session_id}/archive");
+        self.client
+            .execute_with_retry(
+                || self.client.request_builder(reqwest::Method::POST, &path),
+                &[MANAGED_AGENTS_BETA],
+            )
+            .await
+    }
+
+    /// Sub-namespace for the session-events API
+    /// (`/v1/sessions/{id}/events` and the SSE stream).
+    #[must_use]
+    pub fn events(&self, session_id: impl Into<String>) -> super::events::Events<'_> {
+        super::events::Events {
+            client: self.client,
+            session_id: session_id.into(),
+        }
+    }
+
+    /// Delete a session permanently. The session must not be `running`;
+    /// send a `user.interrupt` event first if necessary. Files, memory
+    /// stores, environments, and agents are independent and not
+    /// affected.
+    pub async fn delete(&self, session_id: &str) -> Result<()> {
+        let path = format!("/v1/sessions/{session_id}");
+        // The delete endpoint returns 204 No Content; route through a
+        // dummy `serde_json::Value` to satisfy execute()'s
+        // DeserializeOwned bound and discard the result.
+        let _: serde_json::Value = self
+            .client
+            .execute_with_retry(
+                || self.client.request_builder(reqwest::Method::DELETE, &path),
+                &[MANAGED_AGENTS_BETA],
+            )
+            .await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pretty_assertions::assert_eq;
+    use serde_json::json;
+    use wiremock::matchers::{body_partial_json, header, method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn client_for(mock: &MockServer) -> Client {
+        Client::builder()
+            .api_key("sk-ant-test")
+            .base_url(mock.uri())
+            .build()
+            .unwrap()
+    }
+
+    fn fake_session(id: &str) -> serde_json::Value {
+        json!({
+            "id": id,
+            "status": "idle",
+            "title": "Test session",
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "cache_creation_input_tokens": 0,
+                "cache_read_input_tokens": 0
+            },
+            "created_at": "2026-04-30T12:00:00Z"
+        })
+    }
+
+    #[test]
+    fn agent_ref_serializes_string_form_untagged() {
+        let r = AgentRef::latest("agent_01ABC");
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(v, json!("agent_01ABC"));
+    }
+
+    #[test]
+    fn agent_ref_serializes_pinned_form_with_type_tag() {
+        let r = AgentRef::pinned("agent_01ABC", 3);
+        let v = serde_json::to_value(&r).unwrap();
+        assert_eq!(
+            v,
+            json!({"type": "agent", "id": "agent_01ABC", "version": 3})
+        );
+    }
+
+    #[test]
+    fn agent_ref_round_trips_both_forms() {
+        for r in [AgentRef::latest("a"), AgentRef::pinned("a", 1)] {
+            let v = serde_json::to_value(&r).unwrap();
+            let parsed: AgentRef = serde_json::from_value(v).unwrap();
+            assert_eq!(parsed, r);
+        }
+    }
+
+    #[test]
+    fn create_session_request_drops_empty_optional_fields() {
+        let req = CreateSessionRequest::builder()
+            .agent("agent_01")
+            .environment_id("env_01")
+            .build()
+            .unwrap();
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(v.get("vault_ids").is_none(), "{v}");
+        assert!(v.get("resources").is_none(), "{v}");
+        assert!(v.get("title").is_none(), "{v}");
+    }
+
+    #[tokio::test]
+    async fn create_posts_to_v1_sessions_with_beta_header() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sessions"))
+            .and(header("anthropic-beta", "managed-agents-2026-04-01"))
+            .and(body_partial_json(json!({
+                "agent": "agent_01",
+                "environment_id": "env_01"
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(fake_session("sesn_01")))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let req = CreateSessionRequest::builder()
+            .agent("agent_01")
+            .environment_id("env_01")
+            .build()
+            .unwrap();
+        let s = client
+            .managed_agents()
+            .sessions()
+            .create(req)
+            .await
+            .unwrap();
+        assert_eq!(s.id, "sesn_01");
+        assert_eq!(s.status, SessionStatus::Idle);
+        assert_eq!(s.title.as_deref(), Some("Test session"));
+    }
+
+    #[tokio::test]
+    async fn create_with_pinned_agent_serializes_object_form() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sessions"))
+            .and(body_partial_json(json!({
+                "agent": {"type": "agent", "id": "agent_01", "version": 2}
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(fake_session("sesn_01")))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let req = CreateSessionRequest::builder()
+            .agent(AgentRef::pinned("agent_01", 2))
+            .environment_id("env_01")
+            .build()
+            .unwrap();
+        let _ = client
+            .managed_agents()
+            .sessions()
+            .create(req)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn create_with_vault_ids_includes_them_in_body() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sessions"))
+            .and(body_partial_json(
+                json!({"vault_ids": ["vault_01", "vault_02"]}),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(fake_session("sesn_01")))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let req = CreateSessionRequest::builder()
+            .agent("agent_01")
+            .environment_id("env_01")
+            .vault_id("vault_01")
+            .vault_id("vault_02")
+            .build()
+            .unwrap();
+        let _ = client
+            .managed_agents()
+            .sessions()
+            .create(req)
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn retrieve_returns_typed_session() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions/sesn_42"))
+            .and(header("anthropic-beta", "managed-agents-2026-04-01"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "sesn_42",
+                "status": "running"
+            })))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let s = client
+            .managed_agents()
+            .sessions()
+            .retrieve("sesn_42")
+            .await
+            .unwrap();
+        assert_eq!(s.id, "sesn_42");
+        assert_eq!(s.status, SessionStatus::Running);
+    }
+
+    #[tokio::test]
+    async fn list_passes_pagination_query_params() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/sessions"))
+            .and(wiremock::matchers::query_param("limit", "5"))
+            .and(wiremock::matchers::query_param("include_archived", "true"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "data": [
+                    {"id": "sesn_a", "status": "idle"},
+                    {"id": "sesn_b", "status": "terminated"}
+                ],
+                "has_more": false
+            })))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let page = client
+            .managed_agents()
+            .sessions()
+            .list(ListSessionsParams {
+                limit: Some(5),
+                include_archived: Some(true),
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+        assert_eq!(page.data.len(), 2);
+    }
+
+    #[tokio::test]
+    async fn archive_posts_to_archive_subpath() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/sessions/sesn_x/archive"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "sesn_x",
+                "status": "idle",
+                "archived_at": "2026-04-30T12:00:00Z"
+            })))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        let s = client
+            .managed_agents()
+            .sessions()
+            .archive("sesn_x")
+            .await
+            .unwrap();
+        assert_eq!(s.archived_at.as_deref(), Some("2026-04-30T12:00:00Z"));
+    }
+
+    #[tokio::test]
+    async fn delete_returns_unit_on_success() {
+        let mock = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .and(path("/v1/sessions/sesn_x"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({})))
+            .mount(&mock)
+            .await;
+
+        let client = client_for(&mock);
+        client
+            .managed_agents()
+            .sessions()
+            .delete("sesn_x")
+            .await
+            .unwrap();
+    }
+}

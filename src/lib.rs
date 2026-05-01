@@ -65,6 +65,10 @@ pub mod files;
 pub mod messages;
 pub mod models;
 
+#[cfg(feature = "managed-agents-preview")]
+#[cfg_attr(docsrs, doc(cfg(feature = "managed-agents-preview")))]
+pub mod managed_agents;
+
 #[cfg(feature = "async")]
 pub use client::{Client, ClientBuilder};
 pub use error::{Error, Result};

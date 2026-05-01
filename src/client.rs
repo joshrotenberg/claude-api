@@ -71,6 +71,15 @@ impl Client {
         crate::files::Files::new(self)
     }
 
+    /// Namespace handle for the Managed Agents API (preview).
+    ///
+    /// Gated on the `managed-agents-preview` feature.
+    #[cfg(feature = "managed-agents-preview")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "managed-agents-preview")))]
+    pub fn managed_agents(&self) -> crate::managed_agents::ManagedAgents<'_> {
+        crate::managed_agents::ManagedAgents::new(self)
+    }
+
     /// Build a [`reqwest::RequestBuilder`] preloaded with the version
     /// and user-agent headers. Auth headers are added later by the
     /// configured [`RequestSigner`](crate::auth::RequestSigner). Endpoints

@@ -43,6 +43,7 @@ vertex = ["dep:gcp_auth"]
 
 admin = []
 managed-agents = []
+managed-agents-preview = ["async"]
 pricing = []
 conversation = ["async"]
 
