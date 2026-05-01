@@ -10,16 +10,13 @@ Legend: `✓` = exact match. Otherwise the section lists the diff.
 
 ## Summary
 
-13 / 28 pairs match exactly.
+16 / 28 pairs match exactly.
 
 Mismatches or warnings:
 - `src/managed_agents/sessions.rs:Session:BetaManagedAgentsSession`
 - `src/managed_agents/sessions.rs:SessionUsage:BetaManagedAgentsSessionUsage`
 - `src/managed_agents/agents.rs:Agent:BetaManagedAgentsAgent`
 - `src/managed_agents/vaults.rs:Credential:BetaManagedAgentsCredential`
-- `src/managed_agents/memory_stores.rs:MemoryStore:BetaManagedAgentsGetMemoryStoreResponse`
-- `src/managed_agents/memory_stores.rs:Memory:BetaManagedAgentsMemory`
-- `src/managed_agents/memory_stores.rs:MemoryVersion:BetaManagedAgentsMemoryVersion`
 - `src/managed_agents/resources.rs:FileResource:BetaManagedAgentsFileResource`
 - `src/managed_agents/resources.rs:GitHubRepositoryResource:BetaManagedAgentsGitHubRepositoryResource`
 - `src/managed_agents/resources.rs:MemoryStoreResource:BetaManagedAgentsMemoryStoreResource`
@@ -70,37 +67,11 @@ Mismatches or warnings:
 - `auth_type`
 - `mcp_server_url`
 
-### `MemoryStore` — schema `BetaManagedAgentsGetMemoryStoreResponse`
+### `MemoryStore` — `BetaManagedAgentsMemoryStore`  ✓ (8/8)
 
-**WARN**: no spec fields extracted (schema not found or empty)
+### `Memory` — `BetaManagedAgentsMemory`  ✓ (10/10)
 
-### `Memory` — `BetaManagedAgentsMemory`  (rust=8, spec=10, shared=7)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `content_size_bytes`
-- `memory_store_id`
-- `memory_version_id`
-
-**Extra in Rust** (in our struct but not in spec):
-
-- `size_bytes`
-
-### `MemoryVersion` — `BetaManagedAgentsMemoryVersion`  (rust=7, spec=13, shared=6)
-
-**Missing in Rust** (in spec but not in our struct):
-
-- `content_sha256`
-- `content_size_bytes`
-- `created_by`
-- `memory_store_id`
-- `redacted_at`
-- `redacted_by`
-- `type`
-
-**Extra in Rust** (in our struct but not in spec):
-
-- `redacted`
+### `MemoryVersion` — `BetaManagedAgentsMemoryVersion`  ✓ (13/13)
 
 ### `FileResource` — `BetaManagedAgentsFileResource`  (rust=3, spec=6, shared=3)
 

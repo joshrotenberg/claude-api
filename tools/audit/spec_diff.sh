@@ -198,7 +198,7 @@ PAIRS=(
   "src/managed_agents/environments.rs:Environment:BetaEnvironment"
   "src/managed_agents/vaults.rs:Vault:BetaManagedAgentsVault"
   "src/managed_agents/vaults.rs:Credential:BetaManagedAgentsCredential"
-  "src/managed_agents/memory_stores.rs:MemoryStore:BetaManagedAgentsGetMemoryStoreResponse"
+  "src/managed_agents/memory_stores.rs:MemoryStore:BetaManagedAgentsMemoryStore"
   "src/managed_agents/memory_stores.rs:Memory:BetaManagedAgentsMemory"
   "src/managed_agents/memory_stores.rs:MemoryVersion:BetaManagedAgentsMemoryVersion"
   "src/managed_agents/resources.rs:FileResource:BetaManagedAgentsFileResource"

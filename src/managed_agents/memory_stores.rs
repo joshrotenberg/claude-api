@@ -9,6 +9,8 @@
 //! Limits: max 8 stores per session, individual memories capped at
 //! 100KB (~25K tokens). Structure as many small focused files.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::client::Client;
@@ -35,6 +37,9 @@ pub struct MemoryStore {
     /// Description shown to the agent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
+    /// Free-form key-value metadata attached at create time.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub metadata: HashMap<String, String>,
     /// Creation timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
@@ -134,6 +139,12 @@ pub struct Memory {
     /// listings; preserved as-is.
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     pub ty: Option<String>,
+    /// Parent store ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_store_id: Option<String>,
+    /// Current version ID for this memory. Updates on every mutation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_version_id: Option<String>,
     /// Path within the store (e.g. `/preferences/formatting.md`).
     pub path: String,
     /// Memory content. Absent on list responses.
@@ -143,9 +154,9 @@ pub struct Memory {
     /// preconditions on update.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content_sha256: Option<String>,
-    /// Size in bytes.
+    /// Size of the content in bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub size_bytes: Option<u64>,
+    pub content_size_bytes: Option<u64>,
     /// Creation timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
@@ -245,19 +256,60 @@ impl ListMemoriesParams {
 // Memory version types
 // =====================================================================
 
+/// What mutation produced a [`MemoryVersion`]. Closed enum.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[non_exhaustive]
+pub enum MemoryVersionOperation {
+    /// Initial creation.
+    Created,
+    /// Content was modified.
+    Modified,
+    /// Memory was deleted.
+    Deleted,
+}
+
+/// Who or what produced a [`MemoryVersion`]. Tagged-union of
+/// session, API, or user actor.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum MemoryActor {
+    /// Mutation made by a managed-agents session.
+    SessionActor {
+        /// Session ID.
+        session_id: String,
+    },
+    /// Mutation made directly via the API.
+    ApiActor {
+        /// API key ID that produced the mutation.
+        api_key_id: String,
+    },
+    /// Mutation made by a console user.
+    UserActor {
+        /// User ID.
+        user_id: String,
+    },
+}
+
 /// An immutable historical version of a memory.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct MemoryVersion {
     /// Stable identifier (`memver_...`).
     pub id: String,
+    /// Wire `type`; always `"memory_version"`.
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    pub ty: Option<String>,
+    /// Parent store ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_store_id: Option<String>,
     /// ID of the memory this version belongs to.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_id: Option<String>,
-    /// What kind of mutation produced this version: typically `create`,
-    /// `update`, `delete`, or `redact`.
+    /// What kind of mutation produced this version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub operation: Option<String>,
+    pub operation: Option<MemoryVersionOperation>,
     /// Path at the time of this version.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
@@ -265,12 +317,24 @@ pub struct MemoryVersion {
     /// the retrieve endpoint includes it. `None` for redacted versions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,
-    /// `true` once the version has been redacted.
+    /// Size of the content in bytes.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub redacted: Option<bool>,
+    pub content_size_bytes: Option<u64>,
+    /// SHA-256 of the content.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_sha256: Option<String>,
+    /// Who created this version.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub created_by: Option<MemoryActor>,
     /// Creation timestamp.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub created_at: Option<String>,
+    /// Set when the version has been redacted (RFC3339).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redacted_at: Option<String>,
+    /// Who redacted the version, when applicable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redacted_by: Option<MemoryActor>,
 }
 
 /// Optional knobs for [`MemoryVersions::list`].
@@ -891,7 +955,7 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "id": "memver_01",
                 "memory_id": "mem_01",
-                "operation": "create",
+                "operation": "created",
                 "path": "/notes.md",
                 "content": "Original."
             })))
@@ -906,7 +970,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(v.content.as_deref(), Some("Original."));
-        assert_eq!(v.operation.as_deref(), Some("create"));
+        assert_eq!(v.operation, Some(MemoryVersionOperation::Created));
     }
 
     #[tokio::test]
@@ -918,8 +982,9 @@ mod tests {
             ))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "id": "memver_01",
-                "operation": "redact",
-                "redacted": true
+                "operation": "deleted",
+                "redacted_at": "2026-04-30T12:00:00Z",
+                "redacted_by": {"type": "api_actor", "api_key_id": "ak_01"}
             })))
             .mount(&mock)
             .await;
@@ -932,7 +997,11 @@ mod tests {
             .redact("memver_01")
             .await
             .unwrap();
-        assert_eq!(v.redacted, Some(true));
+        assert_eq!(v.redacted_at.as_deref(), Some("2026-04-30T12:00:00Z"));
+        match v.redacted_by.unwrap() {
+            MemoryActor::ApiActor { api_key_id } => assert_eq!(api_key_id, "ak_01"),
+            _ => panic!("expected ApiActor"),
+        }
     }
 
     #[tokio::test]
@@ -943,8 +1012,8 @@ mod tests {
             .and(wiremock::matchers::query_param("memory_id", "mem_01"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "data": [
-                    {"id": "memver_02", "operation": "update"},
-                    {"id": "memver_01", "operation": "create"}
+                    {"id": "memver_02", "operation": "modified"},
+                    {"id": "memver_01", "operation": "created"}
                 ],
                 "has_more": false
             })))
