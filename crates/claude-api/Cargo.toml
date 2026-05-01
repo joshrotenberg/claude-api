@@ -1,0 +1,140 @@
+[package]
+name = "claude-api"
+version = "0.5.0"
+description = "Type-safe Rust client for the Anthropic API"
+keywords = ["anthropic", "claude", "api", "ai", "llm"]
+categories = ["api-bindings", "asynchronous"]
+readme = "../../README.md"
+documentation = "https://docs.rs/claude-api"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["async", "rustls", "streaming"]
+
+async = [
+    "dep:tokio",
+    "dep:reqwest",
+    "dep:async-trait",
+    "dep:futures-util",
+    "dep:bytes",
+    "dep:tokio-util",
+    "reqwest?/stream",
+    "reqwest?/multipart",
+]
+sync = ["dep:reqwest", "reqwest?/blocking"]
+
+rustls = ["reqwest?/rustls-tls"]
+native-tls = ["reqwest?/native-tls"]
+
+streaming = ["dep:eventsource-stream"]
+
+schemars-tools = ["dep:schemars"]
+
+derive = ["dep:claude-api-derive", "schemars-tools", "async"]
+
+bedrock = ["dep:aws-sigv4", "dep:aws-credential-types"]
+vertex = ["dep:gcp_auth"]
+
+admin = ["async"]
+skills = ["async"]
+user-profiles = ["async"]
+managed-agents = []
+managed-agents-preview = ["async"]
+pricing = []
+conversation = ["async"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = "2.0"
+tracing = "0.1"
+http = { workspace = true }
+
+tokio = { workspace = true, features = ["time", "sync"], optional = true }
+tokio-util = { version = "0.7", features = ["io", "rt"], optional = true }
+reqwest = { workspace = true, features = ["json"], optional = true }
+async-trait = { version = "0.1", optional = true }
+
+eventsource-stream = { version = "0.2", optional = true }
+futures-util = { workspace = true, optional = true }
+bytes = { workspace = true, optional = true }
+
+schemars = { version = "0.8", optional = true }
+
+aws-sigv4 = { version = "1", optional = true }
+aws-credential-types = { version = "1", optional = true }
+gcp_auth = { version = "0.12", optional = true }
+
+claude-api-derive = { version = "0.5.0", path = "../claude-api-derive", optional = true }
+
+[build-dependencies]
+serde = { workspace = true }
+toml = { version = "0.8", default-features = false, features = ["parse"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+wiremock = { workspace = true }
+pretty_assertions = { workspace = true }
+serde_json = { workspace = true }
+futures-util = { workspace = true }
+
+[[example]]
+name = "basic"
+required-features = ["async"]
+
+[[example]]
+name = "streaming"
+required-features = ["async", "streaming"]
+
+[[example]]
+name = "streaming_callbacks"
+required-features = ["async", "streaming"]
+
+[[example]]
+name = "tool_use"
+required-features = ["async"]
+
+[[example]]
+name = "vision"
+required-features = ["async"]
+
+[[example]]
+name = "document"
+required-features = ["async"]
+
+[[example]]
+name = "conversation"
+required-features = ["async", "conversation", "pricing"]
+
+[[example]]
+name = "agent_loop"
+required-features = ["async", "conversation"]
+
+[[example]]
+name = "typed_tools"
+required-features = ["async", "conversation", "schemars-tools"]
+
+[[example]]
+name = "derived_tool"
+required-features = ["async", "conversation", "derive"]
+
+[[example]]
+name = "blocking"
+required-features = ["sync"]
+
+[lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+module_name_repetitions = "allow"
+must_use_candidate = "allow"
+missing_errors_doc = "allow"
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
