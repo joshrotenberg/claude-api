@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "claude-api"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "async-trait",
  "aws-credential-types",
@@ -294,7 +294,7 @@ dependencies = [
 
 [[package]]
 name = "claude-api-derive"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -303,7 +303,7 @@ dependencies = [
 
 [[package]]
 name = "claude-api-test"
-version = "0.4.3"
+version = "0.4.4"
 dependencies = [
  "bytes",
  "claude-api",

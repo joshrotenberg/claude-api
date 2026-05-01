@@ -80,6 +80,15 @@ impl Client {
         crate::managed_agents::ManagedAgents::new(self)
     }
 
+    /// Namespace handle for the Admin API. Requires an admin API key.
+    ///
+    /// Gated on the `admin` feature.
+    #[cfg(feature = "admin")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "admin")))]
+    pub fn admin(&self) -> crate::admin::Admin<'_> {
+        crate::admin::Admin::new(self)
+    }
+
     /// Build a [`reqwest::RequestBuilder`] preloaded with the version
     /// and user-agent headers. Auth headers are added later by the
     /// configured [`RequestSigner`](crate::auth::RequestSigner). Endpoints

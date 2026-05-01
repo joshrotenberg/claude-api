@@ -69,6 +69,10 @@ pub mod models;
 #[cfg_attr(docsrs, doc(cfg(feature = "managed-agents-preview")))]
 pub mod managed_agents;
 
+#[cfg(feature = "admin")]
+#[cfg_attr(docsrs, doc(cfg(feature = "admin")))]
+pub mod admin;
+
 #[cfg(feature = "async")]
 pub use client::{Client, ClientBuilder};
 pub use error::{Error, Result};

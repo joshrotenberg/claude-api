@@ -35,6 +35,36 @@ pub struct Paginated<T> {
     pub last_id: Option<String>,
 }
 
+/// Pagination envelope for endpoints that use opaque `next_page`
+/// cursors instead of `after_id` / `before_id`. Used by Skills, the
+/// Admin API's reports + rate-limit lists, and a few other surfaces.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub struct PaginatedNextPage<T> {
+    /// Items on this page.
+    pub data: Vec<T>,
+    /// Whether more pages exist. Some endpoints omit this in favor of
+    /// the `next_page` field alone; we tolerate either.
+    #[serde(default)]
+    pub has_more: bool,
+    /// Opaque cursor for the next page. `None` when no more pages.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_page: Option<String>,
+}
+
+impl<T> PaginatedNextPage<T> {
+    /// Cursor to pass as `page` on the next request, or `None` when
+    /// the listing is exhausted.
+    pub fn next_cursor(&self) -> Option<&str> {
+        self.next_page.as_deref()
+    }
+
+    /// Whether the page itself is empty.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+}
+
 impl<T> Paginated<T> {
     /// Cursor for the next page (forward direction): the `last_id` of this
     /// page, suitable for the next request's `after_id` parameter. Returns
