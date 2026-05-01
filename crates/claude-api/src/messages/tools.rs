@@ -4,6 +4,44 @@
 //! a user-defined function ([`CustomTool`]) or a server-side built-in
 //! ([`BuiltinTool`]) like web search or code execution. [`ToolChoice`]
 //! controls whether and which tool the model must invoke.
+//!
+//! For high-level dispatch (registry, parallel calls, agent loop) see
+//! [`crate::tool_dispatch`]. For `#[derive(Tool)]` see `claude-api-derive`.
+//!
+//! # Define and send a custom tool
+//!
+//! ```no_run
+//! use claude_api::{Client, messages::{CreateMessageRequest, Tool, CustomTool},
+//!     types::ModelId};
+//! use serde_json::json;
+//! # async fn run() -> Result<(), claude_api::Error> {
+//! let weather = Tool::Custom(
+//!     CustomTool::new(
+//!         "get_weather",
+//!         json!({
+//!             "type": "object",
+//!             "properties": {"city": {"type": "string"}},
+//!             "required": ["city"]
+//!         }),
+//!     )
+//!     .description("Return the current weather for a city."),
+//! );
+//! let client = Client::new(std::env::var("ANTHROPIC_API_KEY").unwrap());
+//! let resp = client
+//!     .messages()
+//!     .create(
+//!         CreateMessageRequest::builder()
+//!             .model(ModelId::SONNET_4_6)
+//!             .max_tokens(512)
+//!             .tools(vec![weather])
+//!             .user("What's the weather in Tokyo?")
+//!             .build()?,
+//!     )
+//!     .await?;
+//! println!("{:?}", resp.stop_reason);
+//! # Ok(())
+//! # }
+//! ```
 
 use serde::{Deserialize, Serialize};
 

@@ -16,6 +16,31 @@
 //! The batch ID is the only state you need to durably persist; reattach
 //! later by calling [`Batches::get(id)`](Batches::get) or
 //! [`Batches::wait_for(id, _)`](Batches::wait_for).
+//!
+//! # Quick start
+//!
+//! ```no_run
+//! use claude_api::{Client, batches::{BatchRequest, BatchResultPayload, WaitOptions},
+//!     messages::CreateMessageRequest, types::ModelId};
+//! # async fn run() -> Result<(), claude_api::Error> {
+//! let client = Client::new(std::env::var("ANTHROPIC_API_KEY").unwrap());
+//! let requests = vec![
+//!     BatchRequest::new("q1",
+//!         CreateMessageRequest::builder()
+//!             .model(ModelId::HAIKU_4_5).max_tokens(32).user("2 + 2?").build()?),
+//! ];
+//! let batch = client.batches().create(requests).await?;
+//! let finished = client.batches()
+//!     .wait_for(&batch.id, WaitOptions::default()).await?;
+//! let items = client.batches().results(&finished.id).await?;
+//! for item in &items {
+//!     if let BatchResultPayload::Succeeded { message } = &item.result {
+//!         println!("{}: {} tokens", item.custom_id, message.usage.output_tokens);
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
 
 pub mod types;
 

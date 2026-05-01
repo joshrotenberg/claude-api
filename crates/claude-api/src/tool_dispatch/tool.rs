@@ -1,8 +1,15 @@
 //! The [`Tool`] async trait and its companion [`ToolError`].
 //!
-//! [`Tool`] is the foundation for every tool-dispatch shape v0.2 ships:
-//! direct trait implementations, closure adapters via `FnTool` (#19), and
-//! schemars-driven typed handlers (#21) all reduce to a `Tool` impl.
+//! [`Tool`] is the foundation for every tool-dispatch shape: direct
+//! trait implementations, closure adapters via
+//! [`FnTool`](crate::tool_dispatch::FnTool), and schemars-driven typed
+//! handlers ([`crate::tool_dispatch::TypedTool`]) all reduce to a
+//! `dyn Tool` stored in the registry.
+//!
+//! [`ToolApprover`] is the mid-stream approval gate: each pending
+//! tool call is passed to an approver before it executes; return
+//! [`ApprovalDecision::Deny`] to short-circuit the tool and inject an
+//! error result instead.
 
 use async_trait::async_trait;
 

@@ -6,6 +6,36 @@
 //!
 //! Gated on the `conversation` feature in addition to the parent
 //! `tool_dispatch` module's `async` gate.
+//!
+//! # Example
+//!
+//! ```no_run
+//! use claude_api::{Client, conversation::Conversation,
+//!     tool_dispatch::{RunOptions, ToolError, ToolRegistry}, types::ModelId};
+//! use serde_json::json;
+//! # async fn run() -> Result<(), Box<dyn std::error::Error>> {
+//! let client = Client::new(std::env::var("ANTHROPIC_API_KEY").unwrap());
+//! let mut registry = ToolRegistry::new();
+//! registry.register_described(
+//!     "get_weather",
+//!     "Return the current weather for a city.",
+//!     json!({
+//!         "type": "object",
+//!         "properties": {"city": {"type": "string"}},
+//!         "required": ["city"]
+//!     }),
+//!     |input| async move {
+//!         let city = input["city"].as_str().ok_or_else(|| ToolError::invalid_input("missing city"))?;
+//!         Ok(json!({"city": city, "temp_f": 72}))
+//!     },
+//! );
+//! let mut convo = Conversation::new(ModelId::SONNET_4_6, 1024);
+//! convo.push_user("What's the weather in Paris?");
+//! let result = client.run(&mut convo, &registry, RunOptions::default()).await?;
+//! println!("{:?}", result.stop_reason);
+//! # Ok(())
+//! # }
+//! ```
 
 #![cfg(feature = "conversation")]
 

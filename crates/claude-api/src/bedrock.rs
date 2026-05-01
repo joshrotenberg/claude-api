@@ -10,11 +10,28 @@
 //! 3. Inject `anthropic_version: "bedrock-2023-05-31"` and remove the
 //!    `model` field from the body (Bedrock takes the model in the URL).
 //!
-//! Mixing those concerns into the typed namespace handles is a v0.5+
-//! design discussion; for now this module's job is just to make the
-//! request *signable*.
+//! The typed namespace handles still use Anthropic's URL shape; Bedrock
+//! model IDs and the `anthropic_version` header must be supplied by the
+//! caller. See `examples/bedrock.rs` for a complete working sketch.
 //!
 //! Gated on the `bedrock` feature.
+//!
+//! # Set up the client
+//!
+//! ```no_run
+//! use std::sync::Arc;
+//! use claude_api::{Client, bedrock::{BedrockCredentials, BedrockSigner}};
+//! # fn run() -> Result<(), claude_api::Error> {
+//! let region = std::env::var("AWS_REGION").unwrap_or_else(|_| "us-east-1".into());
+//! let creds = BedrockCredentials::from_env()
+//!     .expect("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set");
+//! let client = Client::builder()
+//!     .signer(Arc::new(BedrockSigner::new(creds, &region)))
+//!     .base_url(format!("https://bedrock-runtime.{region}.amazonaws.com"))
+//!     .build()?;
+//! # Ok(())
+//! # }
+//! ```
 
 #![cfg(feature = "bedrock")]
 #![cfg_attr(docsrs, doc(cfg(feature = "bedrock")))]

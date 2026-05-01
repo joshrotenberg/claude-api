@@ -1,9 +1,34 @@
-//! The Messages namespace: [`Messages::create`], [`Messages::count_tokens`],
-//! and their `_with_beta` siblings.
+//! The Messages API namespace.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Function |
+//! |---|---|---|
+//! | `POST` | `/v1/messages` | [`Messages::create`] / [`Messages::create_stream`] |
+//! | `POST` | `/v1/messages/count_tokens` | [`Messages::count_tokens`] |
 //!
 //! Obtain via [`Client::messages`](crate::Client::messages).
 //!
-//! Streaming (`create_stream`) lands in task #12.
+//! # Quick start
+//!
+//! ```no_run
+//! use claude_api::{Client, messages::CreateMessageRequest, types::ModelId};
+//! # async fn run() -> Result<(), claude_api::Error> {
+//! let client = Client::new(std::env::var("ANTHROPIC_API_KEY").unwrap());
+//! let resp = client
+//!     .messages()
+//!     .create(
+//!         CreateMessageRequest::builder()
+//!             .model(ModelId::SONNET_4_6)
+//!             .max_tokens(256)
+//!             .user("Hello!")
+//!             .build()?,
+//!     )
+//!     .await?;
+//! println!("{} output tokens", resp.usage.output_tokens);
+//! # Ok(())
+//! # }
+//! ```
 
 #![cfg(feature = "async")]
 

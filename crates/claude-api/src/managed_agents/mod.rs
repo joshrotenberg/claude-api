@@ -29,6 +29,28 @@
 //! - [`memory_stores`] -- persistent memory across sessions.
 //! - [`agents`] -- agent definitions (create only in this version; full
 //!   CRUD lands once docs are available).
+//!
+//! # Create a session and send a message
+//!
+//! ```no_run
+//! use claude_api::{Client,
+//!     managed_agents::sessions::{AgentRef, CreateSessionRequest},
+//!     managed_agents::events::OutgoingUserEvent};
+//! # async fn run() -> Result<(), claude_api::Error> {
+//! let client = Client::new(std::env::var("ANTHROPIC_API_KEY").unwrap());
+//! let ma = client.managed_agents();
+//! let session = ma.sessions().create(
+//!     CreateSessionRequest::builder()
+//!         .agent(AgentRef::latest("agt_..."))
+//!         .build()?,
+//! ).await?;
+//! let sessions = ma.sessions();
+//! sessions.events(session.id)
+//!     .send(&[OutgoingUserEvent::message("Hello!")])
+//!     .await?;
+//! # Ok(())
+//! # }
+//! ```
 
 #![cfg(feature = "managed-agents-preview")]
 #![cfg_attr(docsrs, doc(cfg(feature = "managed-agents-preview")))]

@@ -1,4 +1,15 @@
 //! The async `Files<'a>` namespace.
+//!
+//! | Method | Path | Function |
+//! |---|---|---|
+//! | `POST` | `/v1/files` | `Files::upload` / `Files::upload_path` |
+//! | `GET` | `/v1/files/{id}` | `Files::get` |
+//! | `GET` | `/v1/files/{id}/content` | `Files::download` / `Files::download_to` |
+//! | `GET` | `/v1/files` | `Files::list` / `Files::list_all` |
+//! | `DELETE` | `/v1/files/{id}` | `Files::delete` |
+//!
+//! Obtain via [`Client::files`](crate::Client::files). Both upload and
+//! download support true streaming I/O via the `_path` / `_to` variants.
 
 #![cfg(feature = "async")]
 
