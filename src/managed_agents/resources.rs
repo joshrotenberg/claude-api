@@ -506,6 +506,25 @@ mod tests {
     }
 
     #[test]
+    fn repository_checkout_round_trips_branch_and_commit() {
+        let branch = RepositoryCheckout::Branch {
+            name: "main".into(),
+        };
+        let v = serde_json::to_value(&branch).unwrap();
+        assert_eq!(v, json!({"type": "branch", "name": "main"}));
+        let parsed: RepositoryCheckout = serde_json::from_value(v).unwrap();
+        assert_eq!(parsed, branch);
+
+        let commit = RepositoryCheckout::Commit {
+            sha: "abc1234".into(),
+        };
+        let v = serde_json::to_value(&commit).unwrap();
+        assert_eq!(v, json!({"type": "commit", "sha": "abc1234"}));
+        let parsed: RepositoryCheckout = serde_json::from_value(v).unwrap();
+        assert_eq!(parsed, commit);
+    }
+
+    #[test]
     fn unknown_resource_type_falls_through_to_other() {
         let raw = json!({"type": "future_resource", "blob": [1, 2]});
         let parsed: SessionResource = serde_json::from_value(raw.clone()).unwrap();

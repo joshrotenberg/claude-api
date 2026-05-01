@@ -384,4 +384,18 @@ mod tests {
         let w = client.admin().workspaces().archive("ws_01").await.unwrap();
         assert!(w.archived_at.is_some());
     }
+
+    #[tokio::test]
+    async fn retrieve_workspace_returns_typed_record() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/organizations/workspaces/ws_R1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(fake_workspace()))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let w = client.admin().workspaces().retrieve("ws_R1").await.unwrap();
+        // fake_workspace() always returns id=ws_01 regardless of path.
+        assert_eq!(w.id, "ws_01");
+    }
 }

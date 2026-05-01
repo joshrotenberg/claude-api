@@ -1020,6 +1020,36 @@ mod tests {
         }
     }
 
+    #[test]
+    fn credential_auth_response_round_trips_known_variants() {
+        let oauth = CredentialAuthResponse::McpOauth {
+            mcp_server_url: "https://mcp.x/mcp".into(),
+            expires_at: Some("2026-05-01T00:00:00Z".into()),
+            refresh: None,
+        };
+        let v = serde_json::to_value(&oauth).unwrap();
+        assert_eq!(v["type"], "mcp_oauth");
+        assert_eq!(v["mcp_server_url"], "https://mcp.x/mcp");
+        let parsed: CredentialAuthResponse = serde_json::from_value(v).unwrap();
+        assert_eq!(parsed, oauth);
+
+        let bearer = CredentialAuthResponse::StaticBearer {
+            mcp_server_url: "https://mcp.y/mcp".into(),
+        };
+        let v = serde_json::to_value(&bearer).unwrap();
+        assert_eq!(
+            v,
+            json!({"type": "static_bearer", "mcp_server_url": "https://mcp.y/mcp"})
+        );
+        let parsed: CredentialAuthResponse = serde_json::from_value(v).unwrap();
+        assert_eq!(parsed, bearer);
+
+        // Unknown auth type falls through to Other.
+        let unknown: CredentialAuthResponse =
+            serde_json::from_value(json!({"type": "future_kind", "x": 1})).unwrap();
+        assert!(matches!(unknown, CredentialAuthResponse::Other));
+    }
+
     #[tokio::test]
     async fn archive_credential_posts_to_archive_subpath() {
         let mock = MockServer::start().await;

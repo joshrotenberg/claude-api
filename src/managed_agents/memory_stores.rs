@@ -1033,4 +1033,47 @@ mod tests {
             .unwrap();
         assert_eq!(page.data.len(), 2);
     }
+
+    #[test]
+    fn memory_actor_round_trips_all_three_variants() {
+        for (actor, expected) in [
+            (
+                MemoryActor::SessionActor {
+                    session_id: "sesn_x".into(),
+                },
+                json!({"type": "session_actor", "session_id": "sesn_x"}),
+            ),
+            (
+                MemoryActor::ApiActor {
+                    api_key_id: "ak_x".into(),
+                },
+                json!({"type": "api_actor", "api_key_id": "ak_x"}),
+            ),
+            (
+                MemoryActor::UserActor {
+                    user_id: "user_x".into(),
+                },
+                json!({"type": "user_actor", "user_id": "user_x"}),
+            ),
+        ] {
+            let v = serde_json::to_value(&actor).unwrap();
+            assert_eq!(v, expected);
+            let parsed: MemoryActor = serde_json::from_value(v).unwrap();
+            assert_eq!(parsed, actor);
+        }
+    }
+
+    #[test]
+    fn memory_version_operation_round_trips_lowercase() {
+        for (op, wire) in [
+            (MemoryVersionOperation::Created, "created"),
+            (MemoryVersionOperation::Modified, "modified"),
+            (MemoryVersionOperation::Deleted, "deleted"),
+        ] {
+            let v = serde_json::to_value(op).unwrap();
+            assert_eq!(v, json!(wire));
+            let parsed: MemoryVersionOperation = serde_json::from_value(v).unwrap();
+            assert_eq!(parsed, op);
+        }
+    }
 }

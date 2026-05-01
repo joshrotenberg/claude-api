@@ -1162,6 +1162,20 @@ mod tests {
         assert!(v.get("session_thread_id").is_none(), "{v}");
     }
 
+    #[test]
+    fn agent_evaluated_permission_round_trips_lowercase() {
+        for (perm, wire) in [
+            (AgentEvaluatedPermission::Allow, "allow"),
+            (AgentEvaluatedPermission::Ask, "ask"),
+            (AgentEvaluatedPermission::Deny, "deny"),
+        ] {
+            let v = serde_json::to_value(perm).unwrap();
+            assert_eq!(v, json!(wire));
+            let parsed: AgentEvaluatedPermission = serde_json::from_value(v).unwrap();
+            assert_eq!(parsed, perm);
+        }
+    }
+
     #[tokio::test]
     async fn events_send_posts_to_events_subpath() {
         let mock = MockServer::start().await;

@@ -753,4 +753,33 @@ mod tests {
         assert_eq!(env.description.as_deref(), Some("new desc"));
         assert_eq!(env.metadata.get("team").map(String::as_str), Some("data"));
     }
+
+    #[tokio::test]
+    async fn retrieve_environment_returns_typed_record() {
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/environments/env_R1"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "env_R1",
+                "type": "environment",
+                "name": "python-data",
+                "description": "Python data-analysis env",
+                "metadata": {"team": "research"},
+                "config": {"type": "cloud"},
+                "created_at": "2026-04-30T12:00:00Z",
+                "updated_at": "2026-04-30T12:01:00Z"
+            })))
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let env = client
+            .managed_agents()
+            .environments()
+            .retrieve("env_R1")
+            .await
+            .unwrap();
+        assert_eq!(env.id, "env_R1");
+        assert_eq!(env.name, "python-data");
+        assert_eq!(env.description.as_deref(), Some("Python data-analysis env"));
+    }
 }
