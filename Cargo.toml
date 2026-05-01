@@ -3,7 +3,7 @@ members = [".", "claude-api-derive", "claude-api-test"]
 
 [package]
 name = "claude-api"
-version = "0.4.6"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Type-safe Rust client for the Anthropic API"
@@ -71,7 +71,7 @@ aws-sigv4 = { version = "1", optional = true }
 aws-credential-types = { version = "1", optional = true }
 gcp_auth = { version = "0.12", optional = true }
 
-claude-api-derive = { version = "0.4.6", path = "claude-api-derive", optional = true }
+claude-api-derive = { version = "0.5.0", path = "claude-api-derive", optional = true }
 
 [build-dependencies]
 serde = { version = "1.0", features = ["derive"] }

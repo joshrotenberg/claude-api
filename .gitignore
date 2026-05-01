@@ -5,3 +5,8 @@ Cargo.lock.bak
 # Local Claude context (per global standards, not version-controlled)
 CLAUDE.md
 .claude/settings.local.json
+
+# Spec-audit working artifacts. AUDIT_DIFF.md is regenerable from
+# tools/audit/spec_diff.sh; AUDIT.md is scratch for the audit pass.
+AUDIT.md
+AUDIT_DIFF.md

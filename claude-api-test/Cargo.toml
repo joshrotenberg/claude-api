@@ -1,6 +1,6 @@
 [package]
 name = "claude-api-test"
-version = "0.4.6"
+version = "0.5.0"
 edition = "2021"
 rust-version = "1.82"
 description = "Test utilities for claude-api: cassette-based replay of recorded HTTP exchanges"
@@ -21,7 +21,7 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 bytes = "1"
 
 [dev-dependencies]
-claude-api = { version = "0.4.6", path = "..", default-features = false, features = ["async", "rustls", "streaming", "skills", "user-profiles", "managed-agents-preview", "admin"] }
+claude-api = { version = "0.5.0", path = "..", default-features = false, features = ["async", "rustls", "streaming", "skills", "user-profiles", "managed-agents-preview", "admin"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 pretty_assertions = "1.4"
 

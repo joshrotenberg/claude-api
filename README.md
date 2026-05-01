@@ -7,41 +7,50 @@ one wraps the HTTP API. They do not depend on each other.
 
 ## Status
 
-**v0.4 -- agent-loop and developer-experience features.** v0.1-v0.3
-endpoint coverage (Messages, Models, Batches, Files, count_tokens,
-streaming) plus:
+**v0.5 -- full API surface.** Every documented Anthropic endpoint is
+now reachable through a typed Rust namespace:
 
-- Agent-loop guardrails: parallel tool dispatch, cumulative cost budget,
-  cancellation token
-- Streaming callbacks: `on_text_delta`, `on_tool_use_complete`,
-  `on_thinking_delta`, `on_message_stop`, `on_error` chained on `EventStream`
-- `dry_run` mode: render the would-be HTTP request without sending it,
-  including `to_curl()` / `to_curl_with_key()` helpers
-- `cost_preview`: pre-flight USD estimate via `count_tokens` + max-tokens
-  upper bound, with a `cost_for(output_tokens)` point estimate
-- `#[derive(Tool)]`: derive a `Tool` impl from a struct that implements
-  `Deserialize` + `JsonSchema` (provided by the new `claude-api-derive`
-  sub-crate)
+- **Messages, Models, Batches, Files, count_tokens, streaming**
+  (carried forward from v0.1-v0.4)
+- **Admin API** (27 endpoints): organization, invites, users,
+  workspaces + members, api_keys, usage_report, cost_report,
+  rate_limits
+- **Skills API** (8 endpoints): full CRUD + skill versions, multipart
+  upload
+- **User Profiles API** (5 endpoints) including the enrollment-URL flow
+- **Managed Agents preview**: sessions, agents, environments, vaults
+  + credentials, memory_stores + memories + memory_versions, session
+  resources, events (list/send/SSE stream), and the multi-agent
+  threads endpoints
+- **Bedrock auth** via a sigv4 `RequestSigner` extension point
+- **Typed `BetaHeader` enum** for the 23 canonical `anthropic-beta`
+  values, with `Other(String)` forward-compat fallthrough
+- **Live-test harness** with 15 record-or-replay tests covering the
+  cheap and read-only surfaces; cassettes committed for free CI replay
+- **Spec-diff tooling** that compares every public Rust struct to its
+  OpenAPI schema field-by-field
 
-Earlier versions:
+Carried forward from v0.4 and earlier:
 
-- **v0.1** Messages + Models endpoints, forward-compatible serde, retry
-  policy that honors `Retry-After`, `request-id` propagation on every
-  error, structured `tracing`
+- **v0.4** Agent-loop guardrails (parallel dispatch + cost budget +
+  cancellation), streaming callbacks, `dry_run`, `cost_preview`,
+  `#[derive(Tool)]` proc macro
+- **v0.3** Typed `Citation` enum, context compaction, full Batches
+  API, Files API beta, typed `BuiltinTool` wrappers
 - **v0.2** `ToolRegistry` + agent loop, `Conversation` helper,
-  `PricingTable`, vision and document blocks, prompt-cache sugar, sync
-  feature
-- **v0.3** Typed `Citation` enum, context compaction for `Conversation`
-  and `Client::run`, full Batches API (with JSONL streaming +
-  `wait_for` poller), Files API beta with streaming `AsyncRead`/
-  `AsyncWrite` upload+download, typed `BuiltinTool` wrappers (`web_search`,
-  `computer`, `bash`, `text_editor`, `code_execution`)
+  `PricingTable`, vision and document blocks, prompt-cache sugar,
+  sync feature
+- **v0.1** Messages + Models endpoints, forward-compatible serde,
+  retry policy that honors `Retry-After`, `request-id` propagation,
+  structured `tracing`
+
+See [`CHANGELOG.md`](CHANGELOG.md) for per-version detail.
 
 ## Quick start
 
 ```toml
 [dependencies]
-claude-api = "0.4"
+claude-api = "0.5"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -119,26 +128,28 @@ loop.
 
 ## Feature flags
 
-| Flag             | Default | Adds                                                       |
-| ---------------- | ------- | ---------------------------------------------------------- |
-| `async`          | yes     | Async client (tokio + reqwest)                             |
-| `rustls`         | yes     | rustls TLS backend                                         |
-| `streaming`      | yes     | SSE streaming + `EventStream::aggregate` + callback hooks  |
-| `sync`           |         | Blocking client (reqwest blocking)                         |
-| `native-tls`     |         | native-tls backend instead of rustls                       |
-| `schemars-tools` |         | `Tool::from_schemars::<T: JsonSchema>` ctor                |
-| `derive`         |         | `#[derive(Tool)]` (pulls in `claude-api-derive`)           |
-| `pricing`        |         | `PricingTable` + cost calculation + `cost_preview`         |
-| `conversation`   |         | Multi-turn `Conversation` helper                           |
-| `bedrock`        |         | AWS sigv4 `BedrockSigner` (custom auth signer)             |
-| `vertex`         |         | GCP Vertex auth -- v0.5+                                   |
-| `admin`          |         | Admin API -- v0.5+                                         |
-| `managed-agents` |         | Managed Agents API -- v0.5+                                |
+| Flag                       | Default | Adds                                                       |
+| -------------------------- | ------- | ---------------------------------------------------------- |
+| `async`                    | yes     | Async client (tokio + reqwest)                             |
+| `rustls`                   | yes     | rustls TLS backend                                         |
+| `streaming`                | yes     | SSE streaming + `EventStream::aggregate` + callback hooks  |
+| `sync`                     |         | Blocking client (reqwest blocking)                         |
+| `native-tls`               |         | native-tls backend instead of rustls                       |
+| `schemars-tools`           |         | `Tool::from_schemars::<T: JsonSchema>` ctor                |
+| `derive`                   |         | `#[derive(Tool)]` (pulls in `claude-api-derive`)           |
+| `pricing`                  |         | `PricingTable` + cost calculation + `cost_preview`         |
+| `conversation`             |         | Multi-turn `Conversation` helper                           |
+| `bedrock`                  |         | AWS sigv4 `BedrockSigner` (custom auth signer)             |
+| `vertex`                   |         | GCP Vertex auth -- v0.6+ (placeholder; not wired yet)      |
+| `admin`                    |         | Admin API (organizations, users, workspaces, etc.)         |
+| `skills`                   |         | Skills API (CRUD + versions, multipart upload)             |
+| `user-profiles`            |         | User Profiles API + enrollment-URL flow                    |
+| `managed-agents-preview`   |         | Managed Agents preview (sessions, agents, vaults, ...)     |
 
 Disable defaults if you only want the type definitions:
 
 ```toml
-claude-api = { version = "0.4", default-features = false }
+claude-api = { version = "0.5", default-features = false }
 ```
 
 ## Tool example with `#[derive(Tool)]`
@@ -181,10 +192,15 @@ description from the doc comment. Override either with
   tool wrappers, context compaction
 - **v0.4** Agent-loop guardrails (parallel dispatch + cost budget +
   cancellation), streaming callbacks, `dry_run`, `cost_preview`,
-  `#[derive(Tool)]` proc macro
-- **v0.5+** Admin API, Managed Agents API, Bedrock and Vertex auth,
-  mid-stream tool approval gates, record/replay test harness, Tower
-  `Service` -> `Tool` integration
+  `#[derive(Tool)]` proc macro, mid-stream tool approval gates,
+  record/replay test harness, Bedrock auth (sigv4 signer)
+- **v0.5** Admin / Skills / User Profiles / Managed Agents preview
+  endpoints, typed `BetaHeader` enum, spec-diff tooling, live-test
+  cassettes
+- **v0.6+** Vertex AI auth, Tower `Service` -> `Tool` integration,
+  typed promotions for `stop_details` / `context_management` /
+  `ModelCapabilities`, streaming-SSE cassette recording, vault
+  credential live tests
 
 ## Anti-goals
 
