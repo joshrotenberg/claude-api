@@ -14,6 +14,10 @@ pub(crate) const USER_AGENT: &str = concat!("claude-api-rs/", env!("CARGO_PKG_VE
 pub mod auth;
 pub mod error;
 
+#[cfg(feature = "bedrock")]
+#[cfg_attr(docsrs, doc(cfg(feature = "bedrock")))]
+pub mod bedrock;
+
 #[cfg(feature = "async")]
 #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
 pub mod client;

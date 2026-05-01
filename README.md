@@ -130,7 +130,7 @@ loop.
 | `derive`         |         | `#[derive(Tool)]` (pulls in `claude-api-derive`)           |
 | `pricing`        |         | `PricingTable` + cost calculation + `cost_preview`         |
 | `conversation`   |         | Multi-turn `Conversation` helper                           |
-| `bedrock`        |         | AWS Bedrock auth -- v0.5+                                  |
+| `bedrock`        |         | AWS sigv4 `BedrockSigner` (custom auth signer)             |
 | `vertex`         |         | GCP Vertex auth -- v0.5+                                   |
 | `admin`          |         | Admin API -- v0.5+                                         |
 | `managed-agents` |         | Managed Agents API -- v0.5+                                |

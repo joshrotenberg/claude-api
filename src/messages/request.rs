@@ -11,7 +11,7 @@ use crate::messages::cache::CacheControl;
 use crate::messages::content::{ContentBlock, KnownBlock};
 use crate::messages::input::{MessageInput, SystemPrompt};
 
-fn apply_cache_control_to_last_block(blocks: &mut [ContentBlock]) {
+fn apply_cache_control_to_last_block_with(blocks: &mut [ContentBlock], cc: CacheControl) {
     let Some(last) = blocks.last_mut() else {
         return;
     };
@@ -22,7 +22,7 @@ fn apply_cache_control_to_last_block(blocks: &mut [ContentBlock]) {
         | KnownBlock::ToolResult { cache_control, .. },
     ) = last
     {
-        *cache_control = Some(CacheControl::ephemeral());
+        *cache_control = Some(cc);
     }
 }
 use crate::messages::mcp::McpServerConfig;
@@ -247,18 +247,36 @@ impl CreateMessageRequestBuilder {
     /// - `Some(Blocks(_))` has `cache_control: ephemeral` set on the last text block.
     /// - `None` is a no-op.
     #[must_use]
-    pub fn cache_control_on_system(mut self) -> Self {
+    pub fn cache_control_on_system(self) -> Self {
+        self.cache_system_inner(CacheControl::ephemeral())
+    }
+
+    /// Shorter alias for [`Self::cache_control_on_system`].
+    #[must_use]
+    pub fn cache_system(self) -> Self {
+        self.cache_control_on_system()
+    }
+
+    /// Like [`Self::cache_system`] but with an explicit TTL (`"5m"`,
+    /// `"1h"`). The `"1h"` form requires the
+    /// `extended-cache-ttl-2025-04-11` beta header.
+    #[must_use]
+    pub fn cache_system_with_ttl(self, ttl: impl Into<String>) -> Self {
+        self.cache_system_inner(CacheControl::ephemeral_ttl(ttl))
+    }
+
+    fn cache_system_inner(mut self, cc: CacheControl) -> Self {
         let blocks = match self.system.take() {
             Some(SystemPrompt::Text(text)) => vec![ContentBlock::Known(KnownBlock::Text {
                 text,
-                cache_control: Some(CacheControl::ephemeral()),
+                cache_control: Some(cc),
                 citations: None,
             })],
             Some(SystemPrompt::Blocks(mut blocks)) => {
                 if let Some(ContentBlock::Known(KnownBlock::Text { cache_control, .. })) =
                     blocks.last_mut()
                 {
-                    *cache_control = Some(CacheControl::ephemeral());
+                    *cache_control = Some(cc);
                 }
                 blocks
             }
@@ -276,7 +294,23 @@ impl CreateMessageRequestBuilder {
     /// the last block that supports it (text, image, document, `tool_result`).
     /// No-op if there are no user-authored messages.
     #[must_use]
-    pub fn cache_control_on_last_user(mut self) -> Self {
+    pub fn cache_control_on_last_user(self) -> Self {
+        self.cache_last_user_inner(CacheControl::ephemeral())
+    }
+
+    /// Shorter alias for [`Self::cache_control_on_last_user`].
+    #[must_use]
+    pub fn cache_last_user(self) -> Self {
+        self.cache_control_on_last_user()
+    }
+
+    /// Like [`Self::cache_last_user`] but with an explicit TTL.
+    #[must_use]
+    pub fn cache_last_user_with_ttl(self, ttl: impl Into<String>) -> Self {
+        self.cache_last_user_inner(CacheControl::ephemeral_ttl(ttl))
+    }
+
+    fn cache_last_user_inner(mut self, cc: CacheControl) -> Self {
         use crate::messages::input::MessageContent;
         use crate::types::Role;
 
@@ -289,12 +323,12 @@ impl CreateMessageRequestBuilder {
                 target.content =
                     MessageContent::Blocks(vec![ContentBlock::Known(KnownBlock::Text {
                         text: std::mem::take(text),
-                        cache_control: Some(CacheControl::ephemeral()),
+                        cache_control: Some(cc),
                         citations: None,
                     })]);
             }
             MessageContent::Blocks(blocks) => {
-                apply_cache_control_to_last_block(blocks);
+                apply_cache_control_to_last_block_with(blocks, cc);
             }
         }
         self
@@ -305,13 +339,29 @@ impl CreateMessageRequestBuilder {
     /// useful when the same tool list is reused across many requests.
     /// No-op if no tools are configured.
     #[must_use]
-    pub fn cache_control_on_tools(mut self) -> Self {
+    pub fn cache_control_on_tools(self) -> Self {
+        self.cache_tools_inner(CacheControl::ephemeral())
+    }
+
+    /// Shorter alias for [`Self::cache_control_on_tools`].
+    #[must_use]
+    pub fn cache_tools(self) -> Self {
+        self.cache_control_on_tools()
+    }
+
+    /// Like [`Self::cache_tools`] but with an explicit TTL.
+    #[must_use]
+    pub fn cache_tools_with_ttl(self, ttl: impl Into<String>) -> Self {
+        self.cache_tools_inner(CacheControl::ephemeral_ttl(ttl))
+    }
+
+    fn cache_tools_inner(mut self, cc: CacheControl) -> Self {
         use crate::messages::tools::Tool as MessagesTool;
         let Some(last) = self.tools.last_mut() else {
             return self;
         };
         if let MessagesTool::Custom(ct) = last {
-            ct.cache_control = Some(CacheControl::ephemeral());
+            ct.cache_control = Some(cc);
         }
         self
     }
@@ -736,5 +786,84 @@ mod tests {
             .unwrap();
         let v = serde_json::to_value(&req).unwrap();
         assert!(v.get("tools").is_none() || v["tools"].as_array().unwrap().is_empty());
+    }
+
+    #[test]
+    fn cache_system_alias_matches_long_form() {
+        let short = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(8)
+            .system("S")
+            .user("u")
+            .cache_system()
+            .build()
+            .unwrap();
+        let long = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(8)
+            .system("S")
+            .user("u")
+            .cache_control_on_system()
+            .build()
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(&short).unwrap(),
+            serde_json::to_value(&long).unwrap(),
+        );
+    }
+
+    #[test]
+    fn cache_system_with_ttl_emits_ttl_field() {
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(8)
+            .system("S")
+            .user("u")
+            .cache_system_with_ttl("1h")
+            .build()
+            .unwrap();
+        let v = serde_json::to_value(&req).unwrap();
+        let blocks = v["system"].as_array().unwrap();
+        let cc = &blocks[0]["cache_control"];
+        assert_eq!(cc["type"], "ephemeral");
+        assert_eq!(cc["ttl"], "1h");
+    }
+
+    #[test]
+    fn cache_last_user_with_ttl_emits_ttl_field() {
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(8)
+            .user("question")
+            .cache_last_user_with_ttl("5m")
+            .build()
+            .unwrap();
+        let v = serde_json::to_value(&req).unwrap();
+        let blocks = v["messages"][0]["content"].as_array().unwrap();
+        let cc = &blocks[0]["cache_control"];
+        assert_eq!(cc["type"], "ephemeral");
+        assert_eq!(cc["ttl"], "5m");
+    }
+
+    #[test]
+    fn cache_tools_with_ttl_emits_ttl_field() {
+        use crate::messages::tools::CustomTool;
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(8)
+            .user("u")
+            .tools(vec![Tool::Custom(CustomTool {
+                name: "t".into(),
+                description: None,
+                input_schema: serde_json::json!({"type":"object"}),
+                cache_control: None,
+            })])
+            .cache_tools_with_ttl("1h")
+            .build()
+            .unwrap();
+        let v = serde_json::to_value(&req).unwrap();
+        let cc = &v["tools"][0]["cache_control"];
+        assert_eq!(cc["type"], "ephemeral");
+        assert_eq!(cc["ttl"], "1h");
     }
 }

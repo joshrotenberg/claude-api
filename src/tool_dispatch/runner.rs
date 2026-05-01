@@ -23,6 +23,9 @@ use crate::types::StopReason;
 /// Type alias for the per-iteration callback hook.
 type IterationHook = Box<dyn Fn(&Message, u32) + Send + Sync + 'static>;
 
+/// Type alias for the post-turn checkpoint hook.
+type CheckpointHook = Box<dyn Fn(&Conversation) + Send + Sync + 'static>;
+
 /// Cost budget for the agent loop, paired with the pricing table used to
 /// evaluate `Conversation::cost`.
 #[cfg(feature = "pricing")]
@@ -40,6 +43,7 @@ pub struct CostBudget {
 pub struct RunOptions {
     max_iterations: u32,
     on_iteration: Option<IterationHook>,
+    on_checkpoint: Option<CheckpointHook>,
     parallel_tool_dispatch: bool,
     #[cfg(feature = "pricing")]
     cost_budget: Option<CostBudget>,
@@ -52,6 +56,7 @@ impl Default for RunOptions {
         Self {
             max_iterations: 16,
             on_iteration: None,
+            on_checkpoint: None,
             parallel_tool_dispatch: true,
             #[cfg(feature = "pricing")]
             cost_budget: None,
@@ -84,6 +89,25 @@ impl RunOptions {
         F: Fn(&Message, u32) + Send + Sync + 'static,
     {
         self.on_iteration = Some(Box::new(hook));
+        self
+    }
+
+    /// Hook invoked at the end of every iteration with a borrowed
+    /// snapshot of the [`Conversation`] -- after the assistant turn and
+    /// any `tool_result` turn have been appended.
+    ///
+    /// **Resumability**: persist the conversation here and resume after
+    /// a process restart by passing the deserialized `Conversation`
+    /// back into [`Client::run`]. The conversation is the source of
+    /// truth for the loop; no additional state needs to be saved.
+    /// Iteration state lives on the stack and is reconstructable from
+    /// turn count alone.
+    #[must_use]
+    pub fn on_checkpoint<F>(mut self, hook: F) -> Self
+    where
+        F: Fn(&Conversation) + Send + Sync + 'static,
+    {
+        self.on_checkpoint = Some(Box::new(hook));
         self
     }
 
@@ -156,6 +180,10 @@ impl fmt::Debug for RunOptions {
             .field(
                 "on_iteration",
                 &self.on_iteration.as_ref().map(|_| "<closure>"),
+            )
+            .field(
+                "on_checkpoint",
+                &self.on_checkpoint.as_ref().map(|_| "<closure>"),
             )
             .field("parallel_tool_dispatch", &self.parallel_tool_dispatch)
             .field("cancel_token", &self.cancel_token.is_some())
@@ -251,6 +279,9 @@ impl Client {
             }
 
             if response.stop_reason != Some(StopReason::ToolUse) {
+                if let Some(hook) = &options.on_checkpoint {
+                    hook(conversation);
+                }
                 return Ok(response);
             }
 
@@ -416,6 +447,14 @@ impl Client {
             }
 
             conversation.messages.push(MessageInput::user(tool_results));
+
+            // Checkpoint after the tool_result turn is appended -- the
+            // conversation is now in a fully-consistent "ready to send
+            // the next turn" state, which is the safe persistence
+            // point.
+            if let Some(hook) = &options.on_checkpoint {
+                hook(conversation);
+            }
         }
 
         Err(Error::MaxIterationsExceeded {
@@ -1029,6 +1068,133 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, Error::Cancelled), "got {err:?}");
+    }
+
+    #[tokio::test]
+    async fn on_checkpoint_fires_after_each_tool_result_turn_and_at_finish() {
+        let mock = MockServer::start().await;
+        // Iteration 1: tool_use
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(assistant_tool_use(
+                "toolu_1",
+                "echo",
+                json!({"text": "hi"}),
+            )))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        // Iteration 2: end_turn
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("done", "end_turn")),
+            )
+            .mount(&mock)
+            .await;
+
+        let captured: Arc<std::sync::Mutex<Vec<usize>>> =
+            Arc::new(std::sync::Mutex::new(Vec::new()));
+        let sink = Arc::clone(&captured);
+        let opts = RunOptions::default().on_checkpoint(move |c| {
+            sink.lock().unwrap().push(c.messages.len());
+        });
+
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("go");
+        client
+            .run(&mut convo, &echo_registry(), opts)
+            .await
+            .unwrap();
+
+        // Should have fired exactly twice:
+        //   - after iteration 1 appended user(tool_results) -> 3 messages
+        //     (initial user, assistant tool_use, user tool_results)
+        //   - after iteration 2 returned end_turn -> 4 messages
+        //     (... + final assistant)
+        let snapshots = captured.lock().unwrap();
+        assert_eq!(*snapshots, vec![3, 4]);
+    }
+
+    #[tokio::test]
+    async fn on_checkpoint_does_not_fire_when_unset() {
+        // Sanity: existing tests run with no checkpoint hook; verify
+        // the default-None path doesn't crash.
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("done", "end_turn")),
+            )
+            .mount(&mock)
+            .await;
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("hi");
+        client
+            .run(&mut convo, &ToolRegistry::new(), RunOptions::default())
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn checkpoint_supports_resume_via_serde() {
+        // Resumability scenario: drive run() to a tool_use turn, persist
+        // the conversation via the checkpoint hook, then drop the
+        // client and resume from the persisted JSON. The second run
+        // should pick up where the first left off without re-emitting
+        // the model turn for iteration 1.
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(assistant_tool_use(
+                "toolu_1",
+                "echo",
+                json!({"text": "first"}),
+            )))
+            .up_to_n_times(1)
+            .mount(&mock)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/v1/messages"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(assistant_text("done", "end_turn")),
+            )
+            .mount(&mock)
+            .await;
+
+        let snapshot: Arc<std::sync::Mutex<Option<String>>> = Arc::new(std::sync::Mutex::new(None));
+        let sink = Arc::clone(&snapshot);
+        let opts = RunOptions::default()
+            .max_iterations(1)
+            .on_checkpoint(move |c| {
+                *sink.lock().unwrap() = Some(serde_json::to_string(c).unwrap());
+            });
+        let client = client_for(&mock);
+        let mut convo = Conversation::new(ModelId::SONNET_4_6, 64);
+        convo.push_user("go");
+
+        // First run: hits max_iterations after one round (we capped it
+        // at 1 so the loop exits via MaxIterationsExceeded *after*
+        // appending the tool_result turn and firing the checkpoint).
+        let _ = client.run(&mut convo, &echo_registry(), opts).await;
+        let json = snapshot.lock().unwrap().clone().expect("checkpoint fired");
+
+        // Resume: deserialize, run again (mock now returns end_turn).
+        drop(convo);
+        let mut resumed: Conversation = serde_json::from_str(&json).unwrap();
+        let final_msg = client
+            .run(
+                &mut resumed,
+                &echo_registry(),
+                RunOptions::default().max_iterations(4),
+            )
+            .await
+            .unwrap();
+        assert_eq!(final_msg.stop_reason, Some(StopReason::EndTurn));
+        // Resumed history grew by one assistant turn.
+        assert!(resumed.messages.len() >= 4);
     }
 
     #[tokio::test]

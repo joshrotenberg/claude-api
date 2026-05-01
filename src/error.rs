@@ -80,6 +80,12 @@ pub enum Error {
         /// Reason supplied by the approver.
         reason: String,
     },
+    /// A [`RequestSigner`](crate::auth::RequestSigner) returned an error
+    /// while signing an outbound request.
+    #[cfg(feature = "async")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
+    #[error("request signing failed: {0}")]
+    Signing(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
 impl Error {
@@ -106,6 +112,8 @@ impl Error {
             | Error::CostBudgetExceeded { .. }
             | Error::Cancelled
             | Error::ToolApprovalStopped { .. } => false,
+            #[cfg(feature = "async")]
+            Error::Signing(_) => false,
         }
     }
 

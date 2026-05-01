@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use serde::de::DeserializeOwned;
 
-use crate::auth::ApiKey;
+use crate::auth::{ApiKey, ApiKeySigner, RequestSigner};
 use crate::error::{Error, Result};
 use crate::retry::RetryPolicy;
 
@@ -23,12 +23,12 @@ pub struct Client {
 
 #[derive(Debug)]
 struct Inner {
-    api_key: ApiKey,
     base_url: String,
     http: reqwest::Client,
     user_agent: String,
     betas: Vec<String>,
     retry: RetryPolicy,
+    signer: Arc<dyn RequestSigner>,
 }
 
 impl Client {
@@ -71,9 +71,11 @@ impl Client {
         crate::files::Files::new(self)
     }
 
-    /// Build a [`reqwest::RequestBuilder`] preloaded with the per-request
-    /// authentication, version, and user-agent headers. Endpoints add their
-    /// body and any per-request beta headers, then call [`Self::execute`].
+    /// Build a [`reqwest::RequestBuilder`] preloaded with the version
+    /// and user-agent headers. Auth headers are added later by the
+    /// configured [`RequestSigner`](crate::auth::RequestSigner). Endpoints
+    /// add their body and any per-request beta headers, then call
+    /// [`Self::execute`].
     pub(crate) fn request_builder(
         &self,
         method: reqwest::Method,
@@ -83,7 +85,6 @@ impl Client {
         self.inner
             .http
             .request(method, url)
-            .header("x-api-key", self.inner.api_key.as_str())
             .header("anthropic-version", crate::ANTHROPIC_VERSION)
             .header(reqwest::header::USER_AGENT, &self.inner.user_agent)
     }
@@ -102,7 +103,12 @@ impl Client {
             builder = builder.header("anthropic-beta", joined);
         }
 
-        let response = builder.send().await?;
+        let mut request = builder.build()?;
+        self.inner
+            .signer
+            .sign(&mut request)
+            .map_err(Error::Signing)?;
+        let response = self.inner.http.execute(request).await?;
         let status = response.status();
         let request_id = response
             .headers()
@@ -196,7 +202,12 @@ impl Client {
             builder = builder.header("anthropic-beta", joined);
         }
 
-        let response = builder.send().await?;
+        let mut request = builder.build()?;
+        self.inner
+            .signer
+            .sign(&mut request)
+            .map_err(Error::Signing)?;
+        let response = self.inner.http.execute(request).await?;
         let status = response.status();
 
         if !status.is_success() {
@@ -245,7 +256,10 @@ impl Client {
         if let Some(joined) = merge_betas(&self.inner.betas, per_request_betas) {
             builder = builder.header("anthropic-beta", joined);
         }
-        let req = builder.build()?;
+        let mut req = builder.build()?;
+        // Run the signer through dry_run too so the rendered preview
+        // matches the wire bytes the live client would actually send.
+        self.inner.signer.sign(&mut req).map_err(Error::Signing)?;
         let method = req.method().clone();
         let url = req.url().to_string();
         let mut headers = http::HeaderMap::new();
@@ -299,7 +313,7 @@ fn merge_betas(client_betas: &[String], per_request_betas: &[&str]) -> Option<St
 }
 
 /// Builder for [`Client`].
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct ClientBuilder {
     api_key: Option<String>,
     base_url: Option<String>,
@@ -308,6 +322,22 @@ pub struct ClientBuilder {
     betas: Vec<String>,
     retry: Option<RetryPolicy>,
     http: Option<reqwest::Client>,
+    signer: Option<Arc<dyn RequestSigner>>,
+}
+
+impl std::fmt::Debug for ClientBuilder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ClientBuilder")
+            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+            .field("base_url", &self.base_url)
+            .field("user_agent", &self.user_agent)
+            .field("timeout", &self.timeout)
+            .field("betas", &self.betas)
+            .field("retry", &self.retry)
+            .field("http", &self.http.is_some())
+            .field("signer", &self.signer.as_ref().map(|s| format!("{s:?}")))
+            .finish()
+    }
 }
 
 impl ClientBuilder {
@@ -365,12 +395,29 @@ impl ClientBuilder {
         self
     }
 
-    /// Construct the [`Client`]. Returns [`Error::InvalidConfig`] if the API
-    /// key is missing.
+    /// Install a custom [`RequestSigner`]. If unset, the builder
+    /// defaults to [`ApiKeySigner`] from the configured `api_key`.
+    /// Setting both is allowed: the explicit signer takes precedence
+    /// (useful for tests that want a no-op signer with an unused
+    /// placeholder key).
+    #[must_use]
+    pub fn signer(mut self, signer: Arc<dyn RequestSigner>) -> Self {
+        self.signer = Some(signer);
+        self
+    }
+
+    /// Construct the [`Client`]. Returns [`Error::InvalidConfig`] if
+    /// neither an `api_key` nor a custom `signer` was provided.
     pub fn build(self) -> Result<Client> {
-        let api_key = self
-            .api_key
-            .ok_or_else(|| Error::InvalidConfig("api_key is required".into()))?;
+        let signer: Arc<dyn RequestSigner> = if let Some(s) = self.signer {
+            s
+        } else if let Some(key) = self.api_key {
+            Arc::new(ApiKeySigner::new(ApiKey::new(key)))
+        } else {
+            return Err(Error::InvalidConfig(
+                "either api_key or signer must be configured".into(),
+            ));
+        };
 
         let http = if let Some(c) = self.http {
             c
@@ -383,7 +430,6 @@ impl ClientBuilder {
         };
 
         let inner = Inner {
-            api_key: ApiKey::new(api_key),
             base_url: self
                 .base_url
                 .unwrap_or_else(|| crate::DEFAULT_BASE_URL.to_owned()),
@@ -393,6 +439,7 @@ impl ClientBuilder {
                 .unwrap_or_else(|| crate::USER_AGENT.to_owned()),
             betas: self.betas,
             retry: self.retry.unwrap_or_default(),
+            signer,
         };
 
         Ok(Client {
@@ -427,6 +474,50 @@ mod tests {
     fn build_requires_api_key() {
         let err = Client::builder().build().unwrap_err();
         assert!(matches!(err, Error::InvalidConfig(_)), "{err:?}");
+    }
+
+    #[cfg(feature = "bedrock")]
+    #[tokio::test]
+    async fn bedrock_signer_replaces_x_api_key_with_sigv4_headers() {
+        use crate::bedrock::{BedrockCredentials, BedrockSigner};
+        use wiremock::matchers::header_regex;
+        let mock = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v1/ping"))
+            // sigv4 always emits an Authorization header beginning with the algorithm prefix.
+            .and(header_regex("authorization", "^AWS4-HMAC-SHA256 "))
+            // x-amz-date is the canonical timestamp header.
+            .and(header_exists("x-amz-date"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"ok": true})))
+            .mount(&mock)
+            .await;
+
+        let signer = std::sync::Arc::new(BedrockSigner::new(
+            BedrockCredentials::new("AKIDEXAMPLE", "secret"),
+            "us-east-1",
+        ));
+        let client = Client::builder()
+            .api_key("sk-ant-unused")
+            .base_url(mock.uri())
+            .signer(signer)
+            .build()
+            .unwrap();
+
+        let _: Pong = client
+            .execute(
+                client.request_builder(reqwest::Method::GET, "/v1/ping"),
+                &[],
+            )
+            .await
+            .unwrap();
+
+        // Wiremock would 404 if the signer hadn't run; explicit
+        // negative check on the live captured request:
+        let received = &mock.received_requests().await.unwrap()[0];
+        assert!(
+            received.headers.get("x-api-key").is_none(),
+            "x-api-key should not be set when a custom signer is installed",
+        );
     }
 
     #[test]

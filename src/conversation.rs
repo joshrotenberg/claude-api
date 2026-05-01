@@ -1041,6 +1041,68 @@ mod tests {
         let total = c.cost(&pricing);
         assert!((total - 4.0).abs() < 1e-9, "expected $4.00, got ${total}");
     }
+
+    #[test]
+    fn cost_routes_through_cache_creation_and_read_pricing() {
+        // Regression test: verify Conversation::cost picks up the
+        // separate cache_creation / cache_read pricing fields. A
+        // cache-heavy turn that drops these would under-report cost by
+        // up to ~90% (cache reads are 0.1x input rate).
+        use crate::types::CacheCreationBreakdown;
+        let pricing = crate::pricing::PricingTable::default();
+        let mut c = convo();
+        c.usage_history.push(UsageRecord {
+            model: ModelId::SONNET_4_6,
+            usage: Usage {
+                input_tokens: 0,
+                output_tokens: 0,
+                cache_creation: Some(CacheCreationBreakdown {
+                    ephemeral_5m_input_tokens: 1_000_000,
+                    ephemeral_1h_input_tokens: 1_000_000,
+                }),
+                cache_read_input_tokens: Some(1_000_000),
+                ..Usage::default()
+            },
+        });
+
+        // Sonnet 4.6 input rate = $3/MTok. Cache rates derived:
+        //   5m create = 1.25x = $3.75/MTok -> $3.75
+        //   1h create = 2.0x  = $6.00/MTok -> $6.00
+        //   read     = 0.1x  = $0.30/MTok -> $0.30
+        // Sum = $10.05.
+        let total = c.cost(&pricing);
+        assert!(
+            (total - 10.05).abs() < 1e-9,
+            "expected $10.05 from cache pricing, got ${total} \
+             -- if this dropped to ~$0 the cache fields aren't being read",
+        );
+    }
+
+    #[test]
+    fn cost_routes_through_server_tool_use_charges() {
+        // Regression test: web_search_requests should bill per-request,
+        // not get silently dropped. Pairs with the cache test above.
+        use crate::types::ServerToolUseUsage;
+        let pricing = crate::pricing::PricingTable::default();
+        let mut c = convo();
+        c.usage_history.push(UsageRecord {
+            model: ModelId::SONNET_4_6,
+            usage: Usage {
+                input_tokens: 0,
+                output_tokens: 0,
+                server_tool_use: Some(ServerToolUseUsage {
+                    web_search_requests: 5,
+                }),
+                ..Usage::default()
+            },
+        });
+        // Default web_search rate = $0.01/request -> $0.05.
+        let total = c.cost(&pricing);
+        assert!(
+            (total - 0.05).abs() < 1e-9,
+            "expected $0.05 from 5 web searches, got ${total}",
+        );
+    }
 }
 
 #[cfg(all(test, feature = "async"))]
