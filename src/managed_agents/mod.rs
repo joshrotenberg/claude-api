@@ -35,8 +35,11 @@
 
 use crate::client::Client;
 
+pub mod agents;
+pub mod environments;
 pub mod events;
 pub mod memory_stores;
+pub mod resources;
 pub mod sessions;
 pub mod vaults;
 
@@ -68,6 +71,18 @@ impl<'a> ManagedAgents<'a> {
     #[must_use]
     pub fn memory_stores(&self) -> memory_stores::MemoryStores<'a> {
         memory_stores::MemoryStores::new(self.client)
+    }
+
+    /// Agents sub-namespace (currently `create` only).
+    #[must_use]
+    pub fn agents(&self) -> agents::Agents<'a> {
+        agents::Agents::new(self.client)
+    }
+
+    /// Environments sub-namespace (full CRUD + archive).
+    #[must_use]
+    pub fn environments(&self) -> environments::Environments<'a> {
+        environments::Environments::new(self.client)
     }
 }
 

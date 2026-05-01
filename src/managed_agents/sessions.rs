@@ -11,6 +11,7 @@ use crate::client::Client;
 use crate::error::Result;
 use crate::pagination::Paginated;
 
+use super::resources::SessionResource;
 use super::MANAGED_AGENTS_BETA;
 
 /// Session lifecycle status.
@@ -115,12 +116,12 @@ pub struct Session {
     /// Cumulative token usage. May be absent on freshly-created sessions.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub usage: Option<SessionUsage>,
-    /// Per-resource raw payloads: file mounts, repository mounts, memory
-    /// store mounts. Typed access lands in stage 6; preserved as
-    /// `Vec<Value>` here so the create/retrieve round-trip works
-    /// regardless.
+    /// Mounted resources: file uploads, GitHub repositories, memory
+    /// stores. Each carries a server-assigned `id` (`sesrsc_...`) used
+    /// for [`Resources::update`](super::resources::Resources::update)
+    /// and [`Resources::delete`](super::resources::Resources::delete).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub resources: Vec<serde_json::Value>,
+    pub resources: Vec<SessionResource>,
     /// Outcome evaluations recorded against this session, when an
     /// outcome was defined. Preserved as `Vec<Value>` until the
     /// outcomes types land.
@@ -151,11 +152,11 @@ pub struct CreateSessionRequest {
     /// Optional vault references for MCP credential resolution.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub vault_ids: Vec<String>,
-    /// Optional resources mounted into the session container at creation
-    /// time (file uploads, GitHub repositories, memory stores).
-    /// Preserved as raw JSON until stage 6 lands a typed surface.
+    /// Optional resources mounted into the session container at
+    /// creation time. Build with the typed constructors in
+    /// [`crate::managed_agents::resources`].
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub resources: Vec<serde_json::Value>,
+    pub resources: Vec<SessionResource>,
     /// Optional human-readable title.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
@@ -175,7 +176,7 @@ pub struct CreateSessionRequestBuilder {
     agent: Option<AgentRef>,
     environment_id: Option<String>,
     vault_ids: Vec<String>,
-    resources: Vec<serde_json::Value>,
+    resources: Vec<SessionResource>,
     title: Option<String>,
 }
 
@@ -208,10 +209,11 @@ impl CreateSessionRequestBuilder {
         self
     }
 
-    /// Append a raw resource entry (file / `github_repository` /
-    /// `memory_store`). Typed builders for these land in stage 6.
+    /// Append a typed resource (file / `github_repository` /
+    /// `memory_store`). Build via the constructors in
+    /// [`crate::managed_agents::resources`].
     #[must_use]
-    pub fn resource(mut self, resource: serde_json::Value) -> Self {
+    pub fn resource(mut self, resource: SessionResource) -> Self {
         self.resources.push(resource);
         self
     }
@@ -353,6 +355,16 @@ impl<'a> Sessions<'a> {
     #[must_use]
     pub fn events(&self, session_id: impl Into<String>) -> super::events::Events<'_> {
         super::events::Events {
+            client: self.client,
+            session_id: session_id.into(),
+        }
+    }
+
+    /// Sub-namespace for resource operations on a session
+    /// (`/v1/sessions/{id}/resources`).
+    #[must_use]
+    pub fn resources(&self, session_id: impl Into<String>) -> super::resources::Resources<'_> {
+        super::resources::Resources {
             client: self.client,
             session_id: session_id.into(),
         }
