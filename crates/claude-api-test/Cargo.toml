@@ -1,6 +1,6 @@
 [package]
 name = "claude-api-test"
-version = "0.5.0"
+version = "0.5.1"
 description = "Test utilities for claude-api: cassette-based replay of recorded HTTP exchanges"
 documentation = "https://docs.rs/claude-api-test"
 edition.workspace = true
@@ -21,7 +21,7 @@ reqwest = { workspace = true, features = ["rustls-tls"] }
 bytes = { workspace = true }
 
 [dev-dependencies]
-claude-api = { version = "0.5.0", path = "../claude-api", default-features = false, features = ["async", "rustls", "streaming", "skills", "user-profiles", "managed-agents-preview", "admin"] }
+claude-api = { version = "0.5.1", path = "../claude-api", default-features = false, features = ["async", "rustls", "streaming", "skills", "user-profiles", "managed-agents-preview", "admin"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 pretty_assertions = { workspace = true }
 
