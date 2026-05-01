@@ -5,6 +5,16 @@ All notable changes to `claude-api`, `claude-api-derive`, and
 Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.2](https://github.com/joshrotenberg/claude-api/compare/v0.5.1...v0.5.2) - 2026-05-01
+
+### Fixed
+
+- remove git-cliff changelog regen + restore curated CHANGELOG ([#23](https://github.com/joshrotenberg/claude-api/pull/23))
+
+### Other
+
+- regenerate changelog ([#22](https://github.com/joshrotenberg/claude-api/pull/22))
+
 ## [0.5.1] -- 2026-05-01
 
 Documentation pass. No API changes.
