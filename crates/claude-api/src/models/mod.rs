@@ -1,4 +1,33 @@
-//! The Models API: `list`, `list_all`, `get`.
+//! The Models API.
+//!
+//! Discover what models are available to your API key, with their
+//! capability matrix and per-model token limits.
+//!
+//! # Endpoints
+//!
+//! | Method | Path | Function |
+//! |---|---|---|
+//! | `GET` | `/v1/models` | [`Models::list`] (paginated) |
+//! | `GET` | `/v1/models` | [`Models::list_all`] (auto-paginates) |
+//! | `GET` | `/v1/models/{id}` | [`Models::get`] |
+//!
+//! # Quick start
+//!
+//! ```no_run
+//! use claude_api::{Client, models::ListModelsParams};
+//! # async fn run() -> Result<(), claude_api::Error> {
+//! let client = Client::new("sk-ant-...");
+//!
+//! // Iterate the full set transparently:
+//! for model in client.models().list_all().await? {
+//!     println!("{}: {}", model.id.as_str(), model.display_name);
+//! }
+//!
+//! // Or fetch one by ID:
+//! let m = client.models().get("claude-sonnet-4-6").await?;
+//! println!("{} (max input: {:?})", m.display_name, m.max_input_tokens);
+//! # Ok(()) }
+//! ```
 
 use serde::{Deserialize, Serialize};
 
