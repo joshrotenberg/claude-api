@@ -1042,6 +1042,7 @@ mod tests {
         assert!((total - 4.0).abs() < 1e-9, "expected $4.00, got ${total}");
     }
 
+    #[cfg(feature = "pricing")]
     #[test]
     fn cost_routes_through_cache_creation_and_read_pricing() {
         // Regression test: verify Conversation::cost picks up the
@@ -1078,6 +1079,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "pricing")]
     #[test]
     fn cost_routes_through_server_tool_use_charges() {
         // Regression test: web_search_requests should bill per-request,

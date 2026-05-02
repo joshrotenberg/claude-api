@@ -41,9 +41,10 @@
 
 use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use claude_api::Client;
-use claude_api::batches::BatchRequest;
+use claude_api::batches::{BatchRequest, BatchResultPayload, WaitOptions};
 use claude_api::managed_agents::agents::{AgentModel, CreateAgentRequest};
 use claude_api::managed_agents::environments::{CreateEnvironmentRequest, EnvironmentConfig};
 use claude_api::managed_agents::events::OutgoingUserEvent;
@@ -552,6 +553,257 @@ async fn live_admin_rate_limits_org() {
             .await
             .expect("rate limits org");
         let _ = page.data.len();
+    })
+    .await;
+}
+
+// =====================================================================
+// Issue #30: User-profiles CRUD lifecycle
+// =====================================================================
+
+#[tokio::test]
+async fn live_user_profiles_lifecycle() {
+    use claude_api::user_profiles::{CreateUserProfileRequest, UpdateUserProfileRequest};
+
+    record_or_replay("user_profiles_lifecycle", |client| async move {
+        // Use a timestamp-derived synthetic external_id so successive
+        // record runs produce distinct profiles.
+        let external_id = format!(
+            "test-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+        );
+
+        // Create.
+        let created = client
+            .user_profiles()
+            .create(
+                CreateUserProfileRequest::new()
+                    .external_id(&external_id)
+                    .metadata_entry("source", "live-smoke"),
+            )
+            .await
+            .expect("create user profile");
+        assert!(created.id.starts_with("uprof_"), "id={}", created.id);
+        assert_eq!(created.external_id.as_deref(), Some(external_id.as_str()));
+
+        // Retrieve.
+        let retrieved = client
+            .user_profiles()
+            .get(&created.id)
+            .await
+            .expect("get user profile");
+        assert_eq!(retrieved.id, created.id);
+
+        // Update metadata.
+        let updated = client
+            .user_profiles()
+            .update(
+                &created.id,
+                UpdateUserProfileRequest::new().set_metadata("updated", "true"),
+            )
+            .await
+            .expect("update user profile");
+        assert_eq!(updated.id, created.id);
+        assert_eq!(
+            updated.metadata.get("updated").map(String::as_str),
+            Some("true")
+        );
+    })
+    .await;
+}
+
+// =====================================================================
+// Issue #31: Skills write lifecycle
+// =====================================================================
+
+#[tokio::test]
+async fn live_skills_write_lifecycle() {
+    use claude_api::skills::{CreateSkillRequest, ListSkillVersionsParams, SkillFile};
+
+    record_or_replay("skills_write_lifecycle", |client| async move {
+        let skill_md = b"# Test Skill\n\nA test skill.\n";
+
+        // Create a skill with an initial SKILL.md.
+        let skill = client
+            .skills()
+            .create(
+                CreateSkillRequest::new()
+                    .display_title("live-smoke-skill")
+                    .file(SkillFile::new("live-smoke-skill/SKILL.md", &skill_md[..])),
+            )
+            .await
+            .expect("create skill");
+        assert!(skill.id.starts_with("skill_"), "id={}", skill.id);
+        assert_eq!(skill.display_title, "live-smoke-skill");
+
+        // List versions -- the initial upload creates version 1.
+        let versions = client
+            .skills()
+            .list_versions(&skill.id, ListSkillVersionsParams::default())
+            .await
+            .expect("list skill versions");
+        assert!(
+            !versions.data.is_empty(),
+            "expected at least one version after upload"
+        );
+        let v = &versions.data[0];
+        assert_eq!(v.skill_id, skill.id);
+
+        // Delete the skill (cascades to all versions).
+        let deleted = client
+            .skills()
+            .delete(&skill.id)
+            .await
+            .expect("delete skill");
+        assert_eq!(deleted.id, skill.id);
+    })
+    .await;
+}
+
+// =====================================================================
+// Issue #32: Batches completion path
+// =====================================================================
+
+#[tokio::test]
+async fn live_batches_wait_and_read() {
+    record_or_replay("batches_wait_and_read", |client| async move {
+        let entries = vec![
+            BatchRequest::new(
+                "live-wait-1",
+                CreateMessageRequest::builder()
+                    .model(ModelId::HAIKU_4_5)
+                    .max_tokens(32)
+                    .user("What is 1 + 1?")
+                    .build()
+                    .expect("build batch entry 1"),
+            ),
+            BatchRequest::new(
+                "live-wait-2",
+                CreateMessageRequest::builder()
+                    .model(ModelId::HAIKU_4_5)
+                    .max_tokens(32)
+                    .user("What is 2 + 2?")
+                    .build()
+                    .expect("build batch entry 2"),
+            ),
+        ];
+
+        let batch = client
+            .batches()
+            .create(entries)
+            .await
+            .expect("create batch");
+        assert!(batch.id.starts_with("msgbatch_"), "id={}", batch.id);
+
+        let finished = client
+            .batches()
+            .wait_for(
+                &batch.id,
+                WaitOptions::default().timeout(Duration::from_secs(600)),
+            )
+            .await
+            .expect("wait_for batch");
+
+        let items = client
+            .batches()
+            .results(&finished.id)
+            .await
+            .expect("batch results");
+
+        assert_eq!(items.len(), 2, "expected 2 result items");
+
+        let mut found_output_tokens = false;
+        for item in &items {
+            match &item.result {
+                BatchResultPayload::Succeeded { message } => {
+                    if message.usage.output_tokens > 0 {
+                        found_output_tokens = true;
+                    }
+                }
+                other => panic!("expected Succeeded, got {other:?}"),
+            }
+        }
+        assert!(
+            found_output_tokens,
+            "expected output_tokens > 0 on at least one result"
+        );
+    })
+    .await;
+}
+
+// =====================================================================
+// Issue #33: Conversation multi-turn + tool-dispatch runner
+// =====================================================================
+
+#[tokio::test]
+async fn live_conversation_multi_turn() {
+    use claude_api::conversation::Conversation;
+
+    record_or_replay("conversation_multi_turn", |client| async move {
+        let mut convo = Conversation::new(ModelId::HAIKU_4_5, 128)
+            .with_cache_breakpoint_on_system()
+            .system("You are a helpful test assistant. Reply concisely.");
+
+        // Turn 1.
+        convo.push_user("Say the word 'hello'.");
+        convo.send(&client).await.expect("turn 1");
+
+        // Turn 2.
+        convo.push_user("Now say the word 'world'.");
+        convo.send(&client).await.expect("turn 2");
+
+        assert_eq!(convo.turn_count(), 2, "expected 2 recorded turns");
+        assert!(
+            convo.cumulative_usage().output_tokens > 0,
+            "expected non-zero cumulative output tokens"
+        );
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn live_tool_dispatch_runner() {
+    use claude_api::conversation::Conversation;
+    use claude_api::tool_dispatch::{RunOptions, ToolError, ToolRegistry};
+    use claude_api::types::StopReason;
+    use serde_json::json;
+
+    record_or_replay("tool_dispatch_runner", |client| async move {
+        let mut registry = ToolRegistry::new();
+        registry.register_described(
+            "echo",
+            "Echo the provided text back to the caller.",
+            json!({
+                "type": "object",
+                "properties": {"text": {"type": "string"}},
+                "required": ["text"]
+            }),
+            |input| async move {
+                let text = input["text"]
+                    .as_str()
+                    .ok_or_else(|| ToolError::invalid_input("missing text"))?;
+                Ok(json!({"echoed": text}))
+            },
+        );
+
+        let mut convo = Conversation::new(ModelId::HAIKU_4_5, 256)
+            .system("You are a test assistant. When asked to echo something, call the echo tool.");
+        convo.push_user("Please echo the phrase 'live test'.");
+
+        let result = client
+            .run(&mut convo, &registry, RunOptions::default())
+            .await
+            .expect("run conversation");
+
+        assert_eq!(
+            result.stop_reason,
+            Some(StopReason::EndTurn),
+            "expected EndTurn stop reason, got {:?}",
+            result.stop_reason
+        );
     })
     .await;
 }
