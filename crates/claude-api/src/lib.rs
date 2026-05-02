@@ -59,6 +59,7 @@
 //! |---|---|
 //! | [`auth`] | API-key wrapper + [`auth::RequestSigner`] trait |
 //! | [`bedrock`] | AWS sigv4 [`bedrock::BedrockSigner`] (feature `bedrock`) |
+//! | [`vertex`] | GCP `OAuth2` [`vertex::VertexSigner`] (feature `vertex`) |
 //! | [`beta`] | [`BetaHeader`] open-string enum for the `anthropic-beta` header |
 //! | [`retry`] | [`retry::RetryPolicy`] honoring `Retry-After` |
 //! | [`error`] | [`Error`] with `request_id`, retry classification |
@@ -129,6 +130,10 @@ pub mod error;
 #[cfg(feature = "bedrock")]
 #[cfg_attr(docsrs, doc(cfg(feature = "bedrock")))]
 pub mod bedrock;
+
+#[cfg(feature = "vertex")]
+#[cfg_attr(docsrs, doc(cfg(feature = "vertex")))]
+pub mod vertex;
 
 #[cfg(feature = "async")]
 #[cfg_attr(docsrs, doc(cfg(feature = "async")))]
