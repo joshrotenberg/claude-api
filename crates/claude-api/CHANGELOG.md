@@ -5,6 +5,12 @@ All notable changes to `claude-api`, `claude-api-derive`, and
 Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.4](https://github.com/joshrotenberg/claude-api/compare/v0.5.3...v0.5.4) - 2026-05-02
+
+### Added
+
+- *(bedrock)* typed Messages namespace via .bedrock() flag ([#40](https://github.com/joshrotenberg/claude-api/pull/40))
+
 ## [0.5.3](https://github.com/joshrotenberg/claude-api/compare/v0.5.2...v0.5.3) - 2026-05-02
 
 ### Added
