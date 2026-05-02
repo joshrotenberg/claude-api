@@ -235,6 +235,30 @@ async fn live_messages_create_minimal() {
     .await;
 }
 
+#[tokio::test]
+async fn live_messages_create_stream() {
+    record_or_replay("messages_create_stream", |client| async move {
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::HAIKU_4_5)
+            .max_tokens(8)
+            .user("Reply with a single word.")
+            .build()
+            .expect("build messages create_stream request");
+        let stream = client
+            .messages()
+            .create_stream(req)
+            .await
+            .expect("open stream");
+        let msg = stream.aggregate().await.expect("aggregate stream");
+        assert_eq!(msg.kind, "message");
+        assert!(!msg.content.is_empty(), "content should not be empty");
+        assert!(msg.stop_reason.is_some(), "stop_reason should be set");
+        assert!(msg.usage.input_tokens > 0);
+        assert!(msg.usage.output_tokens > 0);
+    })
+    .await;
+}
+
 // =====================================================================
 // Tier 2: bounded write+read+cleanup cycles
 // =====================================================================
