@@ -1,18 +1,28 @@
 //! AWS Bedrock auth: sign requests with sigv4 instead of an API key.
 //!
-//! The example reads AWS credentials from the standard environment
-//! variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
-//! `AWS_SESSION_TOKEN`, `AWS_REGION`) and sends one message through the
-//! Bedrock Anthropic endpoint.
+//! Reads AWS credentials from the standard environment variables
+//! (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, optional
+//! `AWS_SESSION_TOKEN`, `AWS_REGION`) and sends one message through
+//! the Bedrock Anthropic endpoint. The typed `Messages` namespace
+//! handles the URL/body shape transform when the client is built with
+//! `.bedrock()`: the request goes to `POST /model/{id}/invoke` with
+//! `anthropic_version` injected and the top-level `model` field
+//! stripped (Bedrock takes the model in the URL).
 //!
 //! ```sh
 //! AWS_ACCESS_KEY_ID=... AWS_SECRET_ACCESS_KEY=... AWS_REGION=us-east-1 \
 //!     cargo run --example bedrock \
-//!     --features bedrock --no-default-features --features async,rustls,streaming,bedrock
+//!     --no-default-features --features async,rustls,streaming,bedrock
 //! ```
 //!
-//! Note: Bedrock Anthropic model IDs use the `anthropic.` prefix, e.g.
-//! `anthropic.claude-sonnet-4-6-20251001-v1:0`.
+//! Bedrock Anthropic model IDs use the `anthropic.` prefix, e.g.
+//! `anthropic.claude-haiku-4-5-20251001-v1:0`. The exact list of
+//! available models depends on your AWS region and account
+//! enrollment. Newer Claude models (Haiku 4.5, Sonnet 4.6, Opus
+//! 4.x) require a cross-region *inference profile* ID (prefixed
+//! `us.` or `global.`) rather than the bare foundation model ID.
+//! Run `aws bedrock list-inference-profiles` to discover what's
+//! available in your region.
 
 use std::sync::Arc;
 
@@ -28,20 +38,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok_or("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set")?;
     let signer = BedrockSigner::new(creds, &region);
 
-    // The Bedrock base URL routes to the regional endpoint.
     let base_url = format!("https://bedrock-runtime.{region}.amazonaws.com");
 
     let client = Client::builder()
+        .api_key("placeholder-bedrock-uses-sigv4")
         .signer(Arc::new(signer))
         .base_url(base_url)
+        .bedrock()
         .build()?;
 
-    // Bedrock model IDs use the full Amazon resource name format.
-    let model = "anthropic.claude-3-5-sonnet-20241022-v2:0";
+    let model =
+        std::env::var("BEDROCK_MODEL").unwrap_or_else(|_| "us.anthropic.claude-sonnet-4-6".into());
 
     let request = CreateMessageRequest::builder()
         .model(model)
-        .max_tokens(256)
+        .max_tokens(64)
         .user("What is 2 + 2?")
         .build()?;
 

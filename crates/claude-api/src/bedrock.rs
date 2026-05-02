@@ -1,18 +1,6 @@
 //! AWS Bedrock support: a [`RequestSigner`] that signs HTTP requests
-//! with sigv4.
-//!
-//! `claude-api` is the Anthropic API client; this module exposes the
-//! signing primitive only. Users who want to talk to Bedrock Anthropic
-//! models still need to:
-//!
-//! 1. Set `Client::builder().base_url("https://bedrock-runtime.{region}.amazonaws.com")`,
-//! 2. Use Bedrock's URL shape (`/model/{model_id}/invoke`),
-//! 3. Inject `anthropic_version: "bedrock-2023-05-31"` and remove the
-//!    `model` field from the body (Bedrock takes the model in the URL).
-//!
-//! The typed namespace handles still use Anthropic's URL shape; Bedrock
-//! model IDs and the `anthropic_version` header must be supplied by the
-//! caller. See `examples/bedrock.rs` for a complete working sketch.
+//! with sigv4, plus the `.bedrock()` builder flag that drives the
+//! typed `Messages` namespace through Bedrock's URL/body shape.
 //!
 //! Gated on the `bedrock` feature.
 //!
@@ -26,12 +14,30 @@
 //! let creds = BedrockCredentials::from_env()
 //!     .expect("AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY must be set");
 //! let client = Client::builder()
+//!     .api_key("placeholder-bedrock-uses-sigv4")
 //!     .signer(Arc::new(BedrockSigner::new(creds, &region)))
 //!     .base_url(format!("https://bedrock-runtime.{region}.amazonaws.com"))
+//!     .bedrock()
 //!     .build()?;
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! With `.bedrock()` set, `client.messages().create(...)` posts to
+//! `/model/{model_id}/invoke` (instead of `/v1/messages`) and the
+//! request body has `model` stripped and `anthropic_version:
+//! "bedrock-2023-05-31"` injected automatically.
+//!
+//! Streaming and `count_tokens` are not yet supported on Bedrock and
+//! return [`Error::InvalidConfig`](crate::Error::InvalidConfig).
+//! Bedrock's streaming endpoint
+//! (`invoke-with-response-stream`) emits AWS event-stream binary
+//! frames rather than SSE; decoding them is a separate task.
+//!
+//! Bedrock model IDs use the `anthropic.` prefix, e.g.
+//! `anthropic.claude-haiku-4-5-20251001-v1:0`. Newer Claude models
+//! require a cross-region inference profile ID (prefixed `us.` or
+//! `global.`).
 
 #![cfg(feature = "bedrock")]
 #![cfg_attr(docsrs, doc(cfg(feature = "bedrock")))]
