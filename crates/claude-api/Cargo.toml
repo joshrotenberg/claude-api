@@ -1,6 +1,6 @@
 [package]
 name = "claude-api"
-version = "0.5.2"
+version = "0.5.3"
 description = "Type-safe Rust client for the Anthropic API"
 keywords = ["anthropic", "claude", "api", "ai", "llm"]
 categories = ["api-bindings", "asynchronous"]

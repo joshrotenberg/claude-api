@@ -5,6 +5,20 @@ All notable changes to `claude-api`, `claude-api-derive`, and
 Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.5.3](https://github.com/joshrotenberg/claude-api/compare/v0.5.2...v0.5.3) - 2026-05-02
+
+### Added
+
+- *(live-tests)* add test stubs for user-profiles, skills write, batches completion, conversation, runner ([#36](https://github.com/joshrotenberg/claude-api/pull/36))
+- *(vertex)* VertexSigner RequestSigner impl for GCP Vertex AI auth ([#37](https://github.com/joshrotenberg/claude-api/pull/37))
+- *(messages)* type-promote stop_details and context_management ([#35](https://github.com/joshrotenberg/claude-api/pull/35))
+- *(models)* type-promote ModelInfo.capabilities ([#27](https://github.com/joshrotenberg/claude-api/pull/27))
+- *(managed-agents)* wire research-preview header for outcomes ([#24](https://github.com/joshrotenberg/claude-api/pull/24))
+
+### Other
+
+- new examples + module header upgrades (issue #15 partial) ([#28](https://github.com/joshrotenberg/claude-api/pull/28))
+
 ## [0.5.2](https://github.com/joshrotenberg/claude-api/compare/v0.5.1...v0.5.2) - 2026-05-01
 
 ### Fixed
