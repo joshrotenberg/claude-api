@@ -41,6 +41,29 @@ use crate::messages::response::{CountTokensResponse, Message};
 #[cfg(feature = "streaming")]
 use crate::messages::stream::EventStream;
 
+/// `anthropic_version` value Bedrock expects in the request body
+/// (see <https://docs.anthropic.com/en/api/claude-on-amazon-bedrock>).
+#[cfg(feature = "bedrock")]
+const BEDROCK_ANTHROPIC_VERSION: &str = "bedrock-2023-05-31";
+
+/// Reshape a [`CreateMessageRequest`] for the Bedrock `InvokeModel` body:
+/// strip the top-level `model` field (Bedrock takes the model in the
+/// URL) and inject `anthropic_version`. Returns the rewritten body and
+/// the original model identifier (for the URL path).
+#[cfg(feature = "bedrock")]
+fn bedrock_payload(request: &CreateMessageRequest) -> Result<(String, serde_json::Value)> {
+    let model_id = request.model.as_str().to_owned();
+    let mut value = serde_json::to_value(request)?;
+    if let Some(obj) = value.as_object_mut() {
+        obj.remove("model");
+        obj.insert(
+            "anthropic_version".to_owned(),
+            serde_json::Value::String(BEDROCK_ANTHROPIC_VERSION.to_owned()),
+        );
+    }
+    Ok((model_id, value))
+}
+
 /// Namespace handle for the Messages API.
 ///
 /// Obtained via [`Client::messages`](crate::Client::messages); cheap to
@@ -69,6 +92,24 @@ impl<'a> Messages<'a> {
         request: CreateMessageRequest,
         betas: &[&str],
     ) -> Result<Message> {
+        #[cfg(feature = "bedrock")]
+        if self.client.is_bedrock() {
+            let (model_id, body) = bedrock_payload(&request)?;
+            let path = format!("/model/{model_id}/invoke");
+            let body_ref = &body;
+            return self
+                .client
+                .execute_with_retry(
+                    || {
+                        self.client
+                            .request_builder(reqwest::Method::POST, &path)
+                            .json(body_ref)
+                    },
+                    betas,
+                )
+                .await;
+        }
+
         let request_ref = &request;
         self.client
             .execute_with_retry(
@@ -94,6 +135,12 @@ impl<'a> Messages<'a> {
         request: CountTokensRequest,
         betas: &[&str],
     ) -> Result<CountTokensResponse> {
+        #[cfg(feature = "bedrock")]
+        if self.client.is_bedrock() {
+            return Err(crate::error::Error::InvalidConfig(
+                "count_tokens is not available on Bedrock".into(),
+            ));
+        }
         let request_ref = &request;
         self.client
             .execute_with_retry(
@@ -122,6 +169,16 @@ impl<'a> Messages<'a> {
         request: &CreateMessageRequest,
         betas: &[&str],
     ) -> Result<DryRun> {
+        #[cfg(feature = "bedrock")]
+        if self.client.is_bedrock() {
+            let (model_id, body) = bedrock_payload(request)?;
+            let path = format!("/model/{model_id}/invoke");
+            let builder = self
+                .client
+                .request_builder(reqwest::Method::POST, &path)
+                .json(&body);
+            return self.client.render_dry_run(builder, betas);
+        }
         let builder = self
             .client
             .request_builder(reqwest::Method::POST, "/v1/messages")
@@ -269,6 +326,15 @@ impl<'a> Messages<'a> {
         mut request: CreateMessageRequest,
         betas: &[&str],
     ) -> Result<EventStream> {
+        #[cfg(feature = "bedrock")]
+        if self.client.is_bedrock() {
+            // Bedrock's `invoke-with-response-stream` uses the AWS event
+            // stream binary protocol, not SSE. Decoding it requires a
+            // separate parser; not yet supported.
+            return Err(crate::error::Error::InvalidConfig(
+                "streaming is not yet supported on Bedrock (uses AWS event stream, not SSE)".into(),
+            ));
+        }
         request.stream = true;
         let response = self
             .client
@@ -928,5 +994,154 @@ mod tests {
         // The body matcher above is the actual assertion; if `stream: true`
         // wasn't sent, the mock would 404.
         let _ = client.messages().create_stream(req).await.unwrap();
+    }
+
+    // ---------------- Bedrock mode ----------------
+
+    #[cfg(feature = "bedrock")]
+    fn bedrock_client_for(mock: &MockServer) -> Client {
+        Client::builder()
+            .api_key("placeholder")
+            .base_url(mock.uri())
+            .bedrock()
+            .build()
+            .unwrap()
+    }
+
+    #[cfg(feature = "bedrock")]
+    #[tokio::test]
+    async fn bedrock_create_rewrites_url_to_invoke_path() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/model/anthropic.claude-haiku-4-5-20251001/invoke"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "msg_bedrock", "type": "message", "role": "assistant",
+                "model": "anthropic.claude-haiku-4-5-20251001",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 5, "output_tokens": 1}
+            })))
+            .expect(1)
+            .mount(&mock)
+            .await;
+
+        let client = bedrock_client_for(&mock);
+        let req = CreateMessageRequest::builder()
+            .model("anthropic.claude-haiku-4-5-20251001")
+            .max_tokens(8)
+            .user("hi")
+            .build()
+            .unwrap();
+        let resp: Message = client.messages().create(req).await.unwrap();
+        assert_eq!(resp.id, "msg_bedrock");
+    }
+
+    #[cfg(feature = "bedrock")]
+    #[tokio::test]
+    async fn bedrock_create_rewrites_body_drops_model_adds_anthropic_version() {
+        let mock = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/model/anthropic.claude-haiku-4-5-20251001/invoke"))
+            .and(body_partial_json(json!({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 8,
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "id": "msg_b", "type": "message", "role": "assistant",
+                "model": "anthropic.claude-haiku-4-5-20251001",
+                "content": [{"type": "text", "text": "ok"}],
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 5, "output_tokens": 1}
+            })))
+            .mount(&mock)
+            .await;
+
+        let client = bedrock_client_for(&mock);
+        let req = CreateMessageRequest::builder()
+            .model("anthropic.claude-haiku-4-5-20251001")
+            .max_tokens(8)
+            .user("hi")
+            .build()
+            .unwrap();
+        client.messages().create(req).await.unwrap();
+
+        // Inspect the captured body: `model` must be absent, since
+        // body_partial_json only enforces presence of named fields.
+        let received = &mock.received_requests().await.unwrap()[0];
+        let body: serde_json::Value = serde_json::from_slice(&received.body).unwrap();
+        assert!(
+            body.get("model").is_none(),
+            "Bedrock body must not include top-level `model`: {body}"
+        );
+        assert_eq!(
+            body.get("anthropic_version").and_then(|v| v.as_str()),
+            Some("bedrock-2023-05-31"),
+        );
+    }
+
+    #[cfg(feature = "bedrock")]
+    #[tokio::test]
+    async fn bedrock_count_tokens_returns_invalid_config() {
+        // Mock will never be hit; if it is, we'll see a 404 from the
+        // unmounted path and the assertion below would change.
+        let mock = MockServer::start().await;
+        let client = bedrock_client_for(&mock);
+        let req = CountTokensRequest::builder()
+            .model("anthropic.claude-haiku-4-5-20251001")
+            .user("hi")
+            .build()
+            .unwrap();
+        let err = client.messages().count_tokens(req).await.unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::InvalidConfig(_)),
+            "expected InvalidConfig, got {err:?}"
+        );
+    }
+
+    #[cfg(all(feature = "bedrock", feature = "streaming"))]
+    #[tokio::test]
+    async fn bedrock_create_stream_returns_invalid_config() {
+        let mock = MockServer::start().await;
+        let client = bedrock_client_for(&mock);
+        let req = CreateMessageRequest::builder()
+            .model("anthropic.claude-haiku-4-5-20251001")
+            .max_tokens(8)
+            .user("hi")
+            .build()
+            .unwrap();
+        let err = client.messages().create_stream(req).await.unwrap_err();
+        assert!(
+            matches!(err, crate::error::Error::InvalidConfig(_)),
+            "expected InvalidConfig, got {err:?}"
+        );
+    }
+
+    #[cfg(feature = "bedrock")]
+    #[test]
+    fn bedrock_dry_run_renders_invoke_url_and_rewritten_body() {
+        let client = Client::builder()
+            .api_key("placeholder")
+            .base_url("https://bedrock-runtime.us-east-1.amazonaws.com")
+            .bedrock()
+            .build()
+            .unwrap();
+        let req = CreateMessageRequest::builder()
+            .model("anthropic.claude-haiku-4-5-20251001")
+            .max_tokens(8)
+            .user("hi")
+            .build()
+            .unwrap();
+        let dry = client.messages().dry_run(&req).unwrap();
+        assert!(
+            dry.url
+                .ends_with("/model/anthropic.claude-haiku-4-5-20251001/invoke"),
+            "url={}",
+            dry.url
+        );
+        assert!(dry.body.get("model").is_none(), "body={}", dry.body);
+        assert_eq!(
+            dry.body.get("anthropic_version").and_then(|v| v.as_str()),
+            Some("bedrock-2023-05-31"),
+        );
     }
 }

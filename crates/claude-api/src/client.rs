@@ -29,6 +29,8 @@ struct Inner {
     betas: Vec<String>,
     retry: RetryPolicy,
     signer: Arc<dyn RequestSigner>,
+    #[cfg(feature = "bedrock")]
+    bedrock: bool,
 }
 
 impl Client {
@@ -280,6 +282,13 @@ impl Client {
         &self.inner.betas
     }
 
+    /// `true` if this client was built via [`ClientBuilder::bedrock`] and
+    /// should target the AWS Bedrock URL/body shape on Messages calls.
+    #[cfg(feature = "bedrock")]
+    pub(crate) fn is_bedrock(&self) -> bool {
+        self.inner.bedrock
+    }
+
     /// Materialize a request without sending it, for use by namespace-level
     /// `dry_run` helpers. Mirrors the header logic in
     /// [`Self::execute`]/[`Self::execute_streaming`] so the rendered
@@ -359,20 +368,24 @@ pub struct ClientBuilder {
     retry: Option<RetryPolicy>,
     http: Option<reqwest::Client>,
     signer: Option<Arc<dyn RequestSigner>>,
+    #[cfg(feature = "bedrock")]
+    bedrock: bool,
 }
 
 impl std::fmt::Debug for ClientBuilder {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ClientBuilder")
-            .field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
+        let mut d = f.debug_struct("ClientBuilder");
+        d.field("api_key", &self.api_key.as_ref().map(|_| "<redacted>"))
             .field("base_url", &self.base_url)
             .field("user_agent", &self.user_agent)
             .field("timeout", &self.timeout)
             .field("betas", &self.betas)
             .field("retry", &self.retry)
             .field("http", &self.http.is_some())
-            .field("signer", &self.signer.as_ref().map(|s| format!("{s:?}")))
-            .finish()
+            .field("signer", &self.signer.as_ref().map(|s| format!("{s:?}")));
+        #[cfg(feature = "bedrock")]
+        d.field("bedrock", &self.bedrock);
+        d.finish()
     }
 }
 
@@ -442,6 +455,28 @@ impl ClientBuilder {
         self
     }
 
+    /// Configure this client to target the AWS Bedrock URL/body shape
+    /// rather than the Anthropic API.
+    ///
+    /// In Bedrock mode, [`Messages::create`](crate::messages::Messages::create)
+    /// rewrites the request to:
+    ///
+    /// - URL: `POST /model/{model_id}/invoke` (vs `POST /v1/messages`)
+    /// - Body: drops the top-level `model` field (it lives in the URL)
+    ///   and injects `anthropic_version: "bedrock-2023-05-31"`
+    ///
+    /// You still need to set the regional Bedrock base URL and install
+    /// a [`BedrockSigner`](crate::bedrock::BedrockSigner) via
+    /// [`Self::signer`]. Streaming and `count_tokens` are not supported
+    /// in Bedrock mode and will return [`Error::InvalidConfig`].
+    #[cfg(feature = "bedrock")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "bedrock")))]
+    #[must_use]
+    pub fn bedrock(mut self) -> Self {
+        self.bedrock = true;
+        self
+    }
+
     /// Construct the [`Client`]. Returns [`Error::InvalidConfig`] if
     /// neither an `api_key` nor a custom `signer` was provided.
     pub fn build(self) -> Result<Client> {
@@ -476,6 +511,8 @@ impl ClientBuilder {
             betas: self.betas,
             retry: self.retry.unwrap_or_default(),
             signer,
+            #[cfg(feature = "bedrock")]
+            bedrock: self.bedrock,
         };
 
         Ok(Client {
