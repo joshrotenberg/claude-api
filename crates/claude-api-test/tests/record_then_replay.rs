@@ -169,6 +169,137 @@ async fn recorder_redacts_auth_headers_by_default() {
     let _ = std::fs::remove_file(&tmp);
 }
 
+/// Full SSE round-trip: wiremock upstream serving `text/event-stream` ->
+/// recorder buffers + writes cassette -> cassette replayed via wiremock ->
+/// `Client::create_stream` drives the replayed SSE and aggregates the
+/// final message.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn recorder_captures_and_replays_sse_response() {
+    use claude_api::messages::CreateMessageRequest;
+    use claude_api::types::ModelId;
+
+    let sse_body = concat!(
+        "event: message_start\n",
+        "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sse_rt\",\"type\":\"message\",",
+        "\"role\":\"assistant\",\"content\":[],\"model\":\"claude-haiku-4-5-20251001\",",
+        "\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n",
+        "\n",
+        "event: content_block_start\n",
+        "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n",
+        "\n",
+        "event: content_block_delta\n",
+        "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n",
+        "\n",
+        "event: content_block_stop\n",
+        "data: {\"type\":\"content_block_stop\",\"index\":0}\n",
+        "\n",
+        "event: message_delta\n",
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}\n",
+        "\n",
+        "event: message_stop\n",
+        "data: {\"type\":\"message_stop\"}\n",
+        "\n",
+    );
+
+    // 1. Stand up a wiremock server serving SSE.
+    // Use `set_body_raw` so wiremock sends `content-type: text/event-stream`;
+    // `set_body_string` would override the content-type to `text/plain`.
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_raw(sse_body.as_bytes(), "text/event-stream")
+                .insert_header("request-id", "req_sse_upstream"),
+        )
+        .mount(&upstream)
+        .await;
+
+    // 2. Boot the recorder.
+    let tmp = tempfile_path("cassette_sse_rt.jsonl");
+    let recorder = Recorder::start(RecorderConfig {
+        upstream: upstream.uri(),
+        cassette_path: tmp.clone(),
+        ..Default::default()
+    })
+    .await
+    .expect("recorder starts");
+
+    // 3. Drive `create_stream` through the recorder.
+    let client = Client::builder()
+        .api_key("sk-ant-real-secret")
+        .base_url(recorder.url())
+        .build()
+        .unwrap();
+
+    let req = CreateMessageRequest::builder()
+        .model(ModelId::HAIKU_4_5)
+        .max_tokens(8)
+        .user("hi streaming")
+        .build()
+        .unwrap();
+
+    let stream = client.messages().create_stream(req.clone()).await.unwrap();
+    let live_msg = stream.aggregate().await.unwrap();
+    assert_eq!(live_msg.id, "msg_sse_rt");
+    assert_eq!(live_msg.usage.output_tokens, 1);
+
+    recorder.shutdown().await.unwrap();
+
+    // 4. Inspect the cassette.
+    let cassette = Cassette::from_path(&tmp).await.expect("cassette loads");
+    assert_eq!(cassette.len(), 1);
+    let entry = &cassette.exchanges()[0];
+    assert_eq!(entry.method, "POST");
+    assert_eq!(entry.path, "/v1/messages");
+    assert_eq!(entry.status, 200);
+    // The SSE body should be stored as a string, not `<N bytes>`.
+    let stored = entry
+        .response
+        .as_str()
+        .expect("SSE response should be stored as a JSON string");
+    assert!(
+        stored.contains("msg_sse_rt"),
+        "cassette should contain the message id: {stored:?}",
+    );
+    assert!(
+        stored.contains("message_start"),
+        "cassette should contain SSE events: {stored:?}",
+    );
+    // content-type header must survive into the cassette.
+    assert!(
+        entry
+            .headers
+            .iter()
+            .any(|(k, v)| k == "content-type" && v.contains("text/event-stream")),
+        "content-type: text/event-stream must be in cassette headers",
+    );
+
+    // 5. Replay: mount on a fresh wiremock, drive `create_stream` again.
+    let replay_server = MockServer::start().await;
+    mount_cassette(&replay_server, &cassette).await;
+    let replay_client = Client::builder()
+        .api_key("sk-ant-test")
+        .base_url(replay_server.uri())
+        .build()
+        .unwrap();
+
+    let stream2 = replay_client.messages().create_stream(req).await.unwrap();
+    let replayed_msg = stream2.aggregate().await.unwrap();
+    assert_eq!(replayed_msg.id, "msg_sse_rt");
+    assert_eq!(replayed_msg.usage.output_tokens, 1);
+
+    match &replayed_msg.content[0] {
+        ContentBlock::Known(KnownBlock::Text { text, .. }) => {
+            assert_eq!(text, "hello");
+        }
+        other => panic!("expected text block, got {other:?}"),
+    }
+
+    let _ = std::fs::remove_file(&tmp);
+}
+
 fn tempfile_path(name: &str) -> std::path::PathBuf {
     let mut p = std::env::temp_dir();
     p.push(format!("claude_api_test_{}_{}", std::process::id(), name));

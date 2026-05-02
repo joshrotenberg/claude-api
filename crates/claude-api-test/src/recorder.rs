@@ -293,8 +293,25 @@ fn build_exchange(
             }),
         )
     };
-    let response_value = serde_json::from_slice::<serde_json::Value>(response_body)
-        .unwrap_or_else(|_| serde_json::Value::String(format!("<{} bytes>", response_body.len())));
+
+    // SSE responses arrive as `text/event-stream` and are not valid JSON.
+    // Store the raw wire text as a JSON string so the cassette can replay
+    // it verbatim; `mount_cassette` detects the content-type and serves
+    // the body as text rather than JSON.
+    let is_sse = response_headers
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|ct| ct.contains("text/event-stream"));
+
+    let response_value = if is_sse {
+        // Preserve SSE wire format as a plain string value.
+        let text = String::from_utf8_lossy(response_body).into_owned();
+        serde_json::Value::String(text)
+    } else {
+        serde_json::from_slice::<serde_json::Value>(response_body).unwrap_or_else(|_| {
+            serde_json::Value::String(format!("<{} bytes>", response_body.len()))
+        })
+    };
 
     let mut headers: Vec<(String, String)> = Vec::new();
     for (name, value) in response_headers {
