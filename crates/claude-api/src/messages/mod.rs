@@ -80,7 +80,11 @@ pub use request::{
     CountTokensRequest, CountTokensRequestBuilder, CreateMessageRequest,
     CreateMessageRequestBuilder,
 };
-pub use response::{ContainerInfo, CountTokensResponse, Message};
+pub use response::{
+    ClearThinkingEdit, ClearToolUsesEdit, ContainerInfo, ContextEdit, CountTokensResponse,
+    KnownContextEdit, KnownStopDetails, Message, RefusalStopDetails, ResponseContextManagement,
+    StopDetails,
+};
 pub use stream::{ContentDelta, KnownContentDelta, KnownStreamEvent, MessageDelta, StreamEvent};
 pub use thinking::ThinkingConfig;
 pub use tools::{BuiltinTool, CustomTool, KnownBuiltinTool, Tool, ToolChoice, UserLocation};
