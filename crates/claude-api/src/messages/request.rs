@@ -1,8 +1,14 @@
 //! Request payloads for the Messages API.
 //!
 //! [`CreateMessageRequest`] is the typed builder for `POST /v1/messages`.
-//! [`CountTokensRequest`] is its slimmer sibling for
-//! `POST /v1/messages/count_tokens`.
+//! Every field is optional except `model` and `max_tokens`; the fluent
+//! builder exposes convenience methods (`.user()`, `.system()`,
+//! `.tools()`, `.cache_control_on_system()`, etc.) alongside the raw
+//! field setters.
+//!
+//! [`CountTokensRequest`] is the slimmer sibling used by
+//! `POST /v1/messages/count_tokens`; it accepts the same message list and
+//! tools but omits generation parameters.
 
 use serde::Serialize;
 

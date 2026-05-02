@@ -1,4 +1,13 @@
-//! Response types: [`Message`], [`CountTokensResponse`], [`ContainerInfo`].
+//! Response types returned by the Messages API.
+//!
+//! | Type | Source |
+//! |---|---|
+//! | [`Message`] | `POST /v1/messages` (non-streaming) or [`EventStream::aggregate`](crate::messages::stream::EventStream::aggregate) |
+//! | [`CountTokensResponse`] | `POST /v1/messages/count_tokens` |
+//! | [`ContainerInfo`] | Nested in `Message::container` when code-execution containers are active |
+//!
+//! `Message.content` is `Vec<ContentBlock>` -- iterate it with a match on
+//! [`crate::messages::ContentBlock::Known`] to extract text, tool calls, etc.
 
 use serde::{Deserialize, Serialize};
 

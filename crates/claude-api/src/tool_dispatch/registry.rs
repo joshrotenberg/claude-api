@@ -5,12 +5,16 @@
 //!
 //! - [`ToolRegistry::register_tool`] takes anything that implements [`Tool`]
 //!   directly.
-//! - [`ToolRegistry::register`] takes a closure plus name/schema; the
-//!   closure is wrapped in an internal [`FnTool`] that implements [`Tool`].
+//! - [`ToolRegistry::register`] / [`ToolRegistry::register_described`] take
+//!   a closure plus name/schema; the closure is wrapped in an internal
+//!   [`FnTool`] adapter.
 //!
-//! Both reduce to the same `Arc<dyn Tool>`, so the agent loop runner
-//! (#20) and the model's tool list ([`ToolRegistry::to_messages_tools`])
-//! treat them identically.
+//! Both reduce to the same `Arc<dyn Tool>`. [`ToolRegistry::to_messages_tools`]
+//! converts the registered schemas into the [`Tool`](crate::messages::Tool)
+//! slice needed by `CreateMessageRequest::tools`.
+//!
+//! For typed inputs derived from a Rust struct see
+//! [`crate::tool_dispatch::TypedTool`] and the `schemars-tools` feature.
 
 use std::collections::HashMap;
 use std::future::Future;

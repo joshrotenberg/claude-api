@@ -1,4 +1,12 @@
-//! Foundational shared types: [`ModelId`], [`Role`], [`Usage`], [`StopReason`].
+//! Foundational shared types used across every API resource.
+//!
+//! | Type | Purpose |
+//! |---|---|
+//! | [`ModelId`] | String-newtype for model identifiers; common models as associated constants |
+//! | [`Role`] | `user` / `assistant` message role |
+//! | [`Usage`] | Token counts returned with every `Message` response |
+//! | [`StopReason`] | Why the model stopped generating (`end_turn`, `max_tokens`, `tool_use`, ...) |
+//! | [`ServiceTier`] | `standard` / `priority` / `batch` service tier on the response |
 
 use std::borrow::Cow;
 use std::fmt;

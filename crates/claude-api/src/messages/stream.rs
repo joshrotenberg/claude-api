@@ -5,9 +5,44 @@
 //! byte-for-byte. Strict-on-known semantics: a known tag with a malformed
 //! body returns a deserialization error rather than silently falling through.
 //!
-//! [`EventStream`] is the typed wrapper around the SSE wire format; call
-//! [`EventStream::aggregate`] to reconstruct a [`Message`] from a full
-//! `message_start → ... → message_stop` sequence.
+//! [`EventStream`] is the typed wrapper around the SSE wire format. Two
+//! consumption patterns:
+//!
+//! - **Event-by-event** via [`futures_util::StreamExt::next`] -- print text
+//!   deltas as they arrive (see `examples/streaming.rs`).
+//! - **Aggregate** via [`EventStream::aggregate`] -- wait for the full
+//!   `message_start ... message_stop` sequence and get back a [`Message`],
+//!   identical to what [`Messages::create`](crate::messages::Messages::create)
+//!   returns.
+//!
+//! # Print text deltas as they arrive
+//!
+//! ```no_run
+//! use claude_api::{Client, messages::{CreateMessageRequest, KnownContentDelta,
+//!     KnownStreamEvent, ContentDelta, StreamEvent}, types::ModelId};
+//! use futures_util::StreamExt;
+//! # async fn run() -> Result<(), claude_api::Error> {
+//! let client = Client::new(std::env::var("ANTHROPIC_API_KEY").unwrap());
+//! let request = CreateMessageRequest::builder()
+//!     .model(ModelId::SONNET_4_6)
+//!     .max_tokens(256)
+//!     .user("Tell me a fact.")
+//!     .build()?;
+//! let mut stream = client.messages().create_stream(request).await?;
+//! while let Some(event) = stream.next().await {
+//!     if let StreamEvent::Known(KnownStreamEvent::ContentBlockDelta {
+//!         delta: ContentDelta::Known(KnownContentDelta::TextDelta { text }),
+//!         ..
+//!     }) = event?
+//!     {
+//!         print!("{text}");
+//!     }
+//! }
+//! # Ok(())
+//! # }
+//! ```
+//!
+//! Gated on the `streaming` feature.
 
 use serde::{Deserialize, Serialize};
 

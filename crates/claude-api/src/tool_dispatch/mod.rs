@@ -1,16 +1,23 @@
-//! Tool-dispatch foundation: the [`Tool`] trait, plus a registry and agent
-//! loop runner (the latter two land in v0.2 tasks #19 and #20).
+//! Tool-dispatch: the [`Tool`] trait, registry, typed inputs, and the agent
+//! loop runner.
 //!
-//! v0.2 will layer three ergonomic shapes on this single trait:
+//! Three ergonomic shapes for registering tools:
 //!
-//! 1. [`Tool`] -- async trait. Implement directly when each tool is its
-//!    own type (typical for shared crate code).
-//! 2. `ToolRegistry::register` -- closure-based handler. The registry wraps
-//!    closures in an internal `FnTool<F>` adapter that implements [`Tool`].
-//! 3. `ToolRegistry::register_typed::<Args>` -- typed-input handler driven
-//!    by `schemars`. Internally builds a `Tool` impl that deserializes the
-//!    raw input into `Args` before dispatching. Behind the
-//!    `schemars-tools` feature.
+//! 1. **[`Tool`] trait** -- implement directly when each tool is its own type.
+//!    Gives full control over the JSON Schema, the async handler, and errors.
+//! 2. **[`ToolRegistry::register`]** -- closure-based handler. The registry
+//!    wraps closures in an internal `FnTool<F>` adapter. Convenient for
+//!    one-off tools that don't need a dedicated type.
+//! 3. **[`TypedTool`] + `ToolRegistry::register_typed`** -- typed-input
+//!    handler driven by `schemars`. The input JSON is deserialized into a
+//!    concrete `Args` type before dispatch. Behind the `schemars-tools`
+//!    feature (or use `#[derive(Tool)]` from `claude-api-derive` for the
+//!    most ergonomic form).
+//!
+//! The agent loop lives in [`runner`] (feature `conversation`). It drives
+//! repeated `messages.create` calls, dispatching tools in parallel via
+//! [`Tool::invoke`], optionally enforcing a cost budget and a mid-stream
+//! approval gate.
 //!
 //! Gated on the `async` feature.
 

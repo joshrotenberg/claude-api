@@ -1,5 +1,13 @@
 //! Request-side message structures: [`MessageInput`], [`MessageContent`],
 //! [`SystemPrompt`].
+//!
+//! [`MessageInput`] is one turn in the conversation history sent to the API.
+//! Build via [`MessageInput::user`] / [`MessageInput::assistant`] for the
+//! common cases, or construct [`MessageContent::Blocks`] directly when you
+//! need multiple content blocks in one turn.
+//!
+//! [`SystemPrompt`] wraps the system string with optional per-block cache
+//! breakpoints for prompt caching.
 
 use serde::{Deserialize, Serialize};
 
