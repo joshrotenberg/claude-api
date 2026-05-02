@@ -21,7 +21,7 @@ reqwest = { workspace = true, features = ["rustls-tls"] }
 bytes = { workspace = true }
 
 [dev-dependencies]
-claude-api = { version = "0.5.2", path = "../claude-api", default-features = false, features = ["async", "rustls", "streaming", "skills", "user-profiles", "managed-agents-preview", "admin"] }
+claude-api = { version = "0.5.2", path = "../claude-api", default-features = false, features = ["async", "rustls", "streaming", "skills", "user-profiles", "managed-agents-preview", "admin", "conversation"] }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 pretty_assertions = { workspace = true }
 
