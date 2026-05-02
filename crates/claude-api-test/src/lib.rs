@@ -232,13 +232,47 @@ impl Cassette {
 /// Mocks are mounted in cassette order. wiremock's first-match semantics
 /// mean that for two exchanges with the same `(method, path)`, the
 /// earlier one wins -- match by request body to disambiguate.
+///
+/// SSE responses (exchanges whose `headers` list contains
+/// `content-type: text/event-stream`) are served as raw text so the
+/// `eventsource-stream` parser on the client side sees the SSE wire
+/// format rather than a JSON-encoded body.
 pub async fn mount_cassette(server: &wiremock::MockServer, cassette: &Cassette) {
     use wiremock::matchers::{body_json, method, path};
     use wiremock::{Mock, ResponseTemplate};
 
     for ex in &cassette.exchanges {
-        let mut response = ResponseTemplate::new(ex.status).set_body_json(ex.response.clone());
+        // Detect SSE exchanges: header list contains content-type:
+        // text/event-stream.  In that case the `response` field holds the
+        // raw SSE wire text as a JSON string; serve it as raw bytes so
+        // the client's `eventsource-stream` parser receives the expected
+        // wire format.
+        let is_sse = ex.headers.iter().any(|(k, v)| {
+            k.eq_ignore_ascii_case("content-type") && v.contains("text/event-stream")
+        });
+
+        let mut response = if is_sse {
+            // `response` is a JSON String containing the SSE wire text.
+            // Use `set_body_raw` so wiremock serves the body with
+            // `content-type: text/event-stream` rather than the default
+            // `text/plain` that `set_body_string` produces. This ensures
+            // the `eventsource-stream` parser on the client side receives
+            // the wire format it expects.
+            let body = ex.response.as_str().unwrap_or("").as_bytes().to_owned();
+            ResponseTemplate::new(ex.status).set_body_raw(body, "text/event-stream")
+        } else {
+            ResponseTemplate::new(ex.status).set_body_json(ex.response.clone())
+        };
+
+        // Apply extra headers. Skip the `content-type` for SSE exchanges:
+        // `set_body_raw` already set the correct MIME and wiremock's
+        // `generate_response` would overwrite it anyway (insert wins over
+        // our earlier `insert_header` call).
         for (k, v) in &ex.headers {
+            if is_sse && k.eq_ignore_ascii_case("content-type") {
+                // Already handled by set_body_raw above.
+                continue;
+            }
             response = response.insert_header(k.as_str(), v.as_str());
         }
 
@@ -255,6 +289,20 @@ pub async fn mount_cassette(server: &wiremock::MockServer, cassette: &Cassette) 
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// A minimal SSE corpus: one `message_start` + one `message_stop`.
+    fn tiny_sse_corpus() -> &'static str {
+        concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sse\",\"type\":\"message\",",
+            "\"role\":\"assistant\",\"content\":[],\"model\":\"claude-haiku-4-5-20251001\",",
+            "\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n",
+            "\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n",
+            "\n",
+        )
+    }
 
     #[test]
     fn parse_jsonl_round_trips() {
@@ -305,5 +353,111 @@ mod tests {
         };
         let c = Cassette::from_exchanges(vec![ex]);
         assert_eq!(c.len(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // SSE cassette round-trip tests
+    // ------------------------------------------------------------------
+
+    /// An SSE exchange serialises the wire text as a JSON string, and
+    /// round-trips through `to_jsonl` / `parse_jsonl` without corruption.
+    #[test]
+    fn sse_exchange_round_trips_through_jsonl() {
+        let sse = tiny_sse_corpus();
+        let ex = RecordedExchange {
+            method: "POST".into(),
+            path: "/v1/messages".into(),
+            status: 200,
+            request: Some(json!({"stream": true})),
+            response: json!(sse),
+            headers: vec![
+                ("content-type".into(), "text/event-stream".into()),
+                ("request-id".into(), "req_sse_1".into()),
+            ],
+        };
+
+        let cassette = Cassette::from_exchanges(vec![ex]);
+        let jsonl = cassette.to_jsonl().unwrap();
+        let again = Cassette::parse_jsonl(&jsonl).unwrap();
+
+        assert_eq!(again.len(), 1);
+        let entry = &again.exchanges()[0];
+        assert_eq!(entry.status, 200);
+        // SSE body survives the round-trip intact.
+        assert_eq!(entry.response.as_str().unwrap(), sse);
+        // Content-type header is preserved.
+        assert!(
+            entry
+                .headers
+                .iter()
+                .any(|(k, v)| k == "content-type" && v.contains("text/event-stream"))
+        );
+    }
+
+    /// `mount_cassette` on a wiremock server, then a real `Client` drives
+    /// `create_stream` against it and receives the expected SSE events.
+    #[tokio::test]
+    async fn mount_cassette_replays_sse_response() {
+        use claude_api::Client;
+        use claude_api::messages::CreateMessageRequest;
+        use claude_api::types::ModelId;
+
+        let sse = concat!(
+            "event: message_start\n",
+            "data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_sse_replay\",\"type\":\"message\",",
+            "\"role\":\"assistant\",\"content\":[],\"model\":\"claude-haiku-4-5-20251001\",",
+            "\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n",
+            "\n",
+            "event: content_block_start\n",
+            "data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n",
+            "\n",
+            "event: content_block_delta\n",
+            "data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hi\"}}\n",
+            "\n",
+            "event: content_block_stop\n",
+            "data: {\"type\":\"content_block_stop\",\"index\":0}\n",
+            "\n",
+            "event: message_delta\n",
+            "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"input_tokens\":3,\"output_tokens\":1}}\n",
+            "\n",
+            "event: message_stop\n",
+            "data: {\"type\":\"message_stop\"}\n",
+            "\n",
+        );
+
+        let cassette = Cassette::from_exchanges(vec![RecordedExchange {
+            method: "POST".into(),
+            path: "/v1/messages".into(),
+            status: 200,
+            request: None,
+            response: json!(sse),
+            headers: vec![("content-type".into(), "text/event-stream".into())],
+        }]);
+
+        let server = wiremock::MockServer::start().await;
+        mount_cassette(&server, &cassette).await;
+
+        let client = Client::builder()
+            .api_key("sk-ant-test")
+            .base_url(server.uri())
+            .build()
+            .unwrap();
+
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::HAIKU_4_5)
+            .max_tokens(8)
+            .user("hi")
+            .build()
+            .unwrap();
+
+        let stream = client.messages().create_stream(req).await.unwrap();
+        let msg = stream.aggregate().await.unwrap();
+
+        assert_eq!(msg.id, "msg_sse_replay");
+        assert_eq!(
+            msg.stop_reason,
+            Some(claude_api::types::StopReason::EndTurn)
+        );
+        assert_eq!(msg.usage.output_tokens, 1);
     }
 }
