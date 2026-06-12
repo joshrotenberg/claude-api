@@ -191,6 +191,11 @@ impl CreateMessageRequestBuilder {
     }
 
     /// Set the sampling temperature.
+    ///
+    /// Note: Claude Opus 4.7+ and Fable 5 reject `temperature`, `top_p`, and
+    /// `top_k` with HTTP 400 -- those models do not accept sampling
+    /// parameters. The crate forwards the value as-is rather than dropping it,
+    /// so the API surfaces the error.
     #[must_use]
     pub fn temperature(mut self, t: f32) -> Self {
         self.temperature = Some(t);
@@ -198,6 +203,8 @@ impl CreateMessageRequestBuilder {
     }
 
     /// Set the nucleus sampling cutoff.
+    ///
+    /// See [`Self::temperature`] -- rejected by Claude Opus 4.7+ and Fable 5.
     #[must_use]
     pub fn top_p(mut self, p: f32) -> Self {
         self.top_p = Some(p);
@@ -205,6 +212,8 @@ impl CreateMessageRequestBuilder {
     }
 
     /// Set the top-k sampling cutoff.
+    ///
+    /// See [`Self::temperature`] -- rejected by Claude Opus 4.7+ and Fable 5.
     #[must_use]
     pub fn top_k(mut self, k: u32) -> Self {
         self.top_k = Some(k);
