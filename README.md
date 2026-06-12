@@ -93,6 +93,11 @@ namespace handle off [`Client`]:
 - **Tool dispatch** with `ToolRegistry`, parallel-by-default
   invocation, mid-stream approval gates, cumulative cost budget,
   cancellation token.
+- **Structured outputs**. `output_config.format` constrains the
+  response to a JSON Schema; `OutputFormat::from_schemars::<T>()`
+  derives the schema from a Rust type (under `schemars-tools`). The
+  same `output_config` carries reasoning `effort` and a beta
+  `task_budget`.
 - **`#[derive(Tool)]`** proc-macro generates the `Tool` impl from a
   struct's `JsonSchema` (under the `derive` feature).
 - **`Conversation`** multi-turn helper with cumulative usage and

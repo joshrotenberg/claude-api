@@ -33,6 +33,7 @@ fn apply_cache_control_to_last_block_with(blocks: &mut [ContentBlock], cc: Cache
 }
 use crate::messages::mcp::McpServerConfig;
 use crate::messages::metadata::{MessageMetadata, RequestServiceTier};
+use crate::messages::output::{Effort, OutputConfig, OutputFormat, TaskBudget};
 use crate::messages::thinking::ThinkingConfig;
 use crate::messages::tools::{Tool, ToolChoice};
 use crate::types::ModelId;
@@ -91,6 +92,10 @@ pub struct CreateMessageRequest {
     /// Container ID for the code-execution built-in tool.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub container: Option<String>,
+    /// Output configuration: structured-output `format`, reasoning `effort`,
+    /// and `task_budget`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_config: Option<OutputConfig>,
 
     /// Whether to stream the response. Set internally by `create_stream`;
     /// not normally touched by callers.
@@ -125,6 +130,7 @@ pub struct CreateMessageRequestBuilder {
     thinking: Option<ThinkingConfig>,
     mcp_servers: Vec<McpServerConfig>,
     container: Option<String>,
+    output_config: Option<OutputConfig>,
 }
 
 impl CreateMessageRequestBuilder {
@@ -372,6 +378,49 @@ impl CreateMessageRequestBuilder {
         self
     }
 
+    /// Set the full [`OutputConfig`] -- structured-output `format`, reasoning
+    /// `effort`, and `task_budget`.
+    #[must_use]
+    pub fn output_config(mut self, cfg: OutputConfig) -> Self {
+        self.output_config = Some(cfg);
+        self
+    }
+
+    /// Constrain the model's output to a schema (structured outputs).
+    ///
+    /// Convenience for setting [`OutputConfig::format`].
+    #[must_use]
+    pub fn output_format(mut self, format: OutputFormat) -> Self {
+        self.output_config
+            .get_or_insert_with(OutputConfig::default)
+            .format = Some(format);
+        self
+    }
+
+    /// Set the reasoning effort level.
+    ///
+    /// Convenience for setting [`OutputConfig::effort`].
+    #[must_use]
+    pub fn effort(mut self, effort: Effort) -> Self {
+        self.output_config
+            .get_or_insert_with(OutputConfig::default)
+            .effort = Some(effort);
+        self
+    }
+
+    /// Set the agentic task budget.
+    ///
+    /// Convenience for setting [`OutputConfig::task_budget`]. Requires the
+    /// `task-budgets-2026-03-13` beta header on the client (see
+    /// [`BetaHeader::TaskBudgets`](crate::BetaHeader::TaskBudgets)).
+    #[must_use]
+    pub fn task_budget(mut self, budget: TaskBudget) -> Self {
+        self.output_config
+            .get_or_insert_with(OutputConfig::default)
+            .task_budget = Some(budget);
+        self
+    }
+
     /// Finalize the request.
     ///
     /// # Errors
@@ -401,6 +450,7 @@ impl CreateMessageRequestBuilder {
             thinking: self.thinking,
             mcp_servers: self.mcp_servers,
             container: self.container,
+            output_config: self.output_config,
             stream: false,
         })
     }
@@ -632,6 +682,25 @@ mod tests {
             v.get("stream").is_none(),
             "stream must be omitted when false"
         );
+    }
+
+    #[test]
+    fn output_config_serializes_under_output_config_key() {
+        let req = CreateMessageRequest::builder()
+            .model(ModelId::SONNET_4_6)
+            .max_tokens(256)
+            .user("extract")
+            .output_format(OutputFormat::json_schema(json!({"type": "object"})))
+            .effort(Effort::High)
+            .build()
+            .unwrap();
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["output_config"]["format"]["type"], "json_schema");
+        assert_eq!(
+            v["output_config"]["format"]["schema"],
+            json!({"type": "object"})
+        );
+        assert_eq!(v["output_config"]["effort"], "high");
     }
 
     #[test]
