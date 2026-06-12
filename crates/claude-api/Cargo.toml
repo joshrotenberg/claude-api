@@ -125,6 +125,18 @@ required-features = ["async", "conversation", "derive"]
 name = "blocking"
 required-features = ["sync"]
 
+[[example]]
+name = "batches"
+required-features = ["async"]
+
+[[example]]
+name = "bedrock"
+required-features = ["async", "bedrock"]
+
+[[example]]
+name = "managed_agents"
+required-features = ["async", "managed-agents-preview"]
+
 [lints.rust]
 unsafe_code = "forbid"
 missing_docs = "warn"
