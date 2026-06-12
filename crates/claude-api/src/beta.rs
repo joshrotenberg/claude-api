@@ -78,6 +78,8 @@ pub enum BetaHeader {
     UserProfiles,
     /// `advisor-tool-2026-03-01`
     AdvisorTool,
+    /// `task-budgets-2026-03-13`
+    TaskBudgets,
     /// Forward-compat fallback for beta headers added by Anthropic
     /// after this enum was last updated. Round-trips byte-for-byte.
     Other(String),
@@ -111,6 +113,7 @@ impl BetaHeader {
             Self::Output300k => "output-300k-2026-03-24",
             Self::UserProfiles => "user-profiles-2026-03-24",
             Self::AdvisorTool => "advisor-tool-2026-03-01",
+            Self::TaskBudgets => "task-budgets-2026-03-13",
             Self::Other(v) => v,
         }
     }
@@ -180,6 +183,7 @@ impl BetaHeader {
             "output-300k-2026-03-24" => Self::Output300k,
             "user-profiles-2026-03-24" => Self::UserProfiles,
             "advisor-tool-2026-03-01" => Self::AdvisorTool,
+            "task-budgets-2026-03-13" => Self::TaskBudgets,
             _ => return None,
         })
     }
@@ -203,7 +207,7 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
 
-    /// All 23 canonical wire strings, in the order they appear on the
+    /// All 24 canonical wire strings, in the order they appear on the
     /// API reference. Pin against drift.
     const ALL_WIRE: &[&str] = &[
         "message-batches-2024-09-24",
@@ -229,6 +233,7 @@ mod tests {
         "output-300k-2026-03-24",
         "user-profiles-2026-03-24",
         "advisor-tool-2026-03-01",
+        "task-budgets-2026-03-13",
     ];
 
     #[test]

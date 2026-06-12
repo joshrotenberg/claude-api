@@ -48,6 +48,8 @@
 //! - [`citation`] -- typed [`Citation`] enum
 //! - [`input`] -- [`MessageInput`], [`SystemPrompt`] helpers
 //! - [`metadata`] -- [`MessageMetadata`], [`RequestServiceTier`]
+//! - [`output`] -- [`OutputConfig`] (structured-output `format`, `effort`,
+//!   `task_budget`)
 //!
 //! For streaming, see [`stream`] for the wire-event types and
 //! [`api::Messages::create_stream`] for the namespace method.
@@ -58,6 +60,7 @@ pub mod content;
 pub mod input;
 pub mod mcp;
 pub mod metadata;
+pub mod output;
 pub mod request;
 pub mod response;
 pub mod stream;
@@ -76,6 +79,7 @@ pub use content::{
 pub use input::{MessageContent, MessageInput, SystemPrompt};
 pub use mcp::{McpServerConfig, McpToolConfiguration};
 pub use metadata::{MessageMetadata, RequestServiceTier};
+pub use output::{Effort, OutputConfig, OutputFormat, TaskBudget};
 pub use request::{
     CountTokensRequest, CountTokensRequestBuilder, CreateMessageRequest,
     CreateMessageRequestBuilder,
