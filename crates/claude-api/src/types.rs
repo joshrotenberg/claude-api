@@ -31,6 +31,10 @@ use serde::{Deserialize, Serialize};
 pub struct ModelId(Cow<'static, str>);
 
 impl ModelId {
+    /// Claude Fable 5, the most capable model (top tier above Opus).
+    pub const FABLE_5: ModelId = ModelId(Cow::Borrowed("claude-fable-5"));
+    /// Claude Opus 4.8.
+    pub const OPUS_4_8: ModelId = ModelId(Cow::Borrowed("claude-opus-4-8"));
     /// Claude Opus 4.7.
     pub const OPUS_4_7: ModelId = ModelId(Cow::Borrowed("claude-opus-4-7"));
     /// Claude Sonnet 4.6.
@@ -209,6 +213,8 @@ mod tests {
 
     #[test]
     fn model_id_serializes_as_string() {
+        round_trip(&ModelId::FABLE_5, "\"claude-fable-5\"");
+        round_trip(&ModelId::OPUS_4_8, "\"claude-opus-4-8\"");
         round_trip(&ModelId::OPUS_4_7, "\"claude-opus-4-7\"");
         round_trip(&ModelId::SONNET_4_6, "\"claude-sonnet-4-6\"");
         round_trip(&ModelId::HAIKU_4_5, "\"claude-haiku-4-5-20251001\"");

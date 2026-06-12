@@ -18,7 +18,7 @@
 //!     .messages()
 //!     .create(
 //!         CreateMessageRequest::builder()
-//!             .model(ModelId::SONNET_4_6)
+//!             .model(ModelId::OPUS_4_8)
 //!             .max_tokens(256)
 //!             .user("Hello!")
 //!             .build()?,

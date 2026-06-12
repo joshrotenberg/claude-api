@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .messages()
         .create(
             CreateMessageRequest::builder()
-                .model(ModelId::SONNET_4_6)
+                .model(ModelId::OPUS_4_8)
                 .max_tokens(256)
                 .system("Be concise.")
                 .user("What is the capital of France?")
