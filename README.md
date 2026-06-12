@@ -126,7 +126,7 @@ namespace handle off [`Client`]:
 | `pricing` |  | `PricingTable` + cost calculation + `cost_preview` |
 | `conversation` |  | Multi-turn `Conversation` helper |
 | `bedrock` |  | AWS sigv4 `BedrockSigner` |
-| `vertex` |  | (placeholder, not yet wired -- see [#6](https://github.com/joshrotenberg/claude-api/issues/6)) |
+| `vertex` |  | GCP Vertex auth via `VertexSigner`; typed `.vertex()` namespace tracked in [#42](https://github.com/joshrotenberg/claude-api/issues/42) |
 | `admin` |  | Admin API |
 | `skills` |  | Skills API |
 | `user-profiles` |  | User Profiles API |
