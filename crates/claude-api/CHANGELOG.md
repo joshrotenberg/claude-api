@@ -5,6 +5,25 @@ All notable changes to `claude-api`, `claude-api-derive`, and
 Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.6.0](https://github.com/joshrotenberg/claude-api/compare/v0.5.3...v0.6.0) - 2026-10-19
+
+### Added
+
+- *(messages)* thinking display, between_tools, system turns, usage speed ([#65](https://github.com/joshrotenberg/claude-api/pull/65))
+- *(messages)* output_config -- structured outputs, effort, task budget ([#60](https://github.com/joshrotenberg/claude-api/pull/60))
+- adaptive thinking + Opus 4.8 / Fable 5 model constants ([#59](https://github.com/joshrotenberg/claude-api/pull/59))
+- *(bedrock)* typed Messages namespace via .bedrock() flag ([#40](https://github.com/joshrotenberg/claude-api/pull/40))
+
+### Fixed
+
+- *(pricing)* current model rates and model constants ([#64](https://github.com/joshrotenberg/claude-api/pull/64))
+- *(examples)* declare required-features for bedrock, managed_agents, batches ([#58](https://github.com/joshrotenberg/claude-api/pull/58))
+
+### Other
+
+- *(deps)* upgrade reqwest to 0.13 ([#63](https://github.com/joshrotenberg/claude-api/pull/63))
+- correct vertex feature note + sampling-param model notes ([#61](https://github.com/joshrotenberg/claude-api/pull/61))
+
 ## [0.5.3](https://github.com/joshrotenberg/claude-api/compare/v0.5.2...v0.5.3) - 2026-05-02
 
 ### Added

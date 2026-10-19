@@ -4,6 +4,12 @@ All notable changes to `claude-api-test` are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/)
 and uses [Semantic Versioning](https://semver.org/).
 
+## [0.5.4](https://github.com/joshrotenberg/claude-api/compare/claude-api-test-v0.5.3...claude-api-test-v0.5.4) - 2026-10-19
+
+### Other
+
+- *(deps)* upgrade reqwest to 0.13 ([#63](https://github.com/joshrotenberg/claude-api/pull/63))
+
 ## [0.5.3](https://github.com/joshrotenberg/claude-api/compare/claude-api-test-v0.5.2...claude-api-test-v0.5.3) - 2026-05-02
 
 ### Added
