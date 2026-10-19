@@ -1,14 +1,19 @@
 //! Configuration for extended thinking.
 //!
 //! Pass a [`ThinkingConfig`] value in the request to have the model emit
-//! `thinking` blocks before its final answer. Two modes are available:
+//! `thinking` blocks before its final answer. The modes:
 //!
 //! - [`ThinkingConfig::Adaptive`] lets the model decide how much to think.
-//!   This is the only accepted mode on Claude Opus 4.7+ and Fable 5, which
-//!   reject `budget_tokens` with HTTP 400.
+//!   This is the thinking mode for Claude Opus 4.6 and every later model;
+//!   Opus 4.7+, Opus 5.x, Sonnet 5.x, Haiku 5.5 and Fable 5.x reject
+//!   `budget_tokens` with HTTP 400. Its optional [`ThinkingDisplay`]
+//!   controls whether thinking text is returned.
 //! - [`ThinkingConfig::Enabled`] caps reasoning at an explicit `budget_tokens`
-//!   (counted against `max_tokens`). Supported on Claude Sonnet 4.6 and
-//!   earlier Opus models.
+//!   (counted against `max_tokens`). For Claude Haiku 4.5 and older models.
+//! - [`ThinkingConfig::BetweenTools`] turns thinking off on Claude Sonnet
+//!   5.5, which rejects [`ThinkingConfig::Disabled`].
+//! - [`ThinkingConfig::Disabled`] turns thinking off where the model allows
+//!   it. Claude Opus 5.5, Sonnet 5.5 and Fable 5.x reject it.
 //!
 //! See [`crate::models::ModelCapabilities`] to check model support at runtime.
 
@@ -26,20 +31,50 @@ pub enum ThinkingConfig {
     /// Enable extended thinking with a per-turn token budget.
     ///
     /// `budget_tokens` caps the thinking length and counts against
-    /// `max_tokens`. Supported on Claude Sonnet 4.6 and earlier Opus models;
-    /// Claude Opus 4.7+ and Fable 5 reject it with HTTP 400 -- use
-    /// [`ThinkingConfig::Adaptive`] there instead.
+    /// `max_tokens`. For Claude Haiku 4.5 and older models; Opus 4.6 and
+    /// Sonnet 4.6 still accept it (deprecated), and later models reject it
+    /// with HTTP 400 -- use [`ThinkingConfig::Adaptive`] there instead.
     Enabled {
         /// Maximum tokens the model may spend thinking on this turn.
         budget_tokens: u32,
     },
     /// Enable extended thinking and let the model decide how much to think.
     ///
-    /// The only accepted thinking mode on Claude Opus 4.7+ and Fable 5.
-    /// Serializes to `{"type": "adaptive"}`.
-    Adaptive,
+    /// Serializes to `{"type": "adaptive"}`, plus `"display"` when set.
+    Adaptive {
+        /// Whether thinking text is returned. `None` leaves the model's
+        /// default, which is [`ThinkingDisplay::Omitted`] on Claude Opus 4.7
+        /// and later: `thinking` blocks arrive with empty text.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        display: Option<ThinkingDisplay>,
+    },
+    /// Think only between tool calls, not before the first response text.
+    ///
+    /// The way to turn thinking off on Claude Sonnet 5.5. Accepted only at
+    /// effort `high` or below, and takes no other fields.
+    BetweenTools,
     /// Disable extended thinking explicitly.
     Disabled,
+}
+
+/// How thinking content is returned on [`ThinkingConfig::Adaptive`].
+///
+/// Thinking happens and is billed the same under every setting; this only
+/// controls what is sent back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ThinkingDisplay {
+    /// Return a readable summary of the reasoning.
+    Summarized,
+    /// Return `thinking` blocks with empty text.
+    Omitted,
+    /// Hide reasoning but return short progress notes between tool calls.
+    /// Beta: requires the `thinking-display-updates-2026-08-18` header.
+    Updates,
+    /// A display value this SDK does not know.
+    #[serde(other)]
+    Other,
 }
 
 impl ThinkingConfig {
@@ -49,13 +84,26 @@ impl ThinkingConfig {
         Self::Enabled { budget_tokens }
     }
 
-    /// Convenience constructor for the [`ThinkingConfig::Adaptive`] variant.
-    ///
-    /// Use this on Claude Opus 4.7+ and Fable 5, which do not accept
-    /// `budget_tokens`.
+    /// Adaptive thinking with the model's default display.
     #[must_use]
     pub fn adaptive() -> Self {
-        Self::Adaptive
+        Self::Adaptive { display: None }
+    }
+
+    /// Adaptive thinking with an explicit [`ThinkingDisplay`].
+    #[must_use]
+    pub fn adaptive_with_display(display: ThinkingDisplay) -> Self {
+        Self::Adaptive {
+            display: Some(display),
+        }
+    }
+
+    /// Adaptive thinking that returns summarized thinking text. Use this
+    /// when streaming reasoning to a reader; the default display on recent
+    /// models returns empty thinking blocks.
+    #[must_use]
+    pub fn adaptive_summarized() -> Self {
+        Self::adaptive_with_display(ThinkingDisplay::Summarized)
     }
 }
 
@@ -79,6 +127,40 @@ mod tests {
         let c = ThinkingConfig::adaptive();
         let v = serde_json::to_value(c).unwrap();
         assert_eq!(v, json!({"type": "adaptive"}));
+        let parsed: ThinkingConfig = serde_json::from_value(v).unwrap();
+        assert_eq!(parsed, c);
+    }
+
+    #[test]
+    fn adaptive_with_display_round_trips() {
+        for (display, wire) in [
+            (ThinkingDisplay::Summarized, "summarized"),
+            (ThinkingDisplay::Omitted, "omitted"),
+            (ThinkingDisplay::Updates, "updates"),
+        ] {
+            let c = ThinkingConfig::adaptive_with_display(display);
+            let v = serde_json::to_value(c).unwrap();
+            assert_eq!(v, json!({"type": "adaptive", "display": wire}));
+            let parsed: ThinkingConfig = serde_json::from_value(v).unwrap();
+            assert_eq!(parsed, c);
+        }
+    }
+
+    #[test]
+    fn unknown_display_deserializes_to_other() {
+        let parsed: ThinkingConfig =
+            serde_json::from_value(json!({"type": "adaptive", "display": "future"})).unwrap();
+        assert_eq!(
+            parsed,
+            ThinkingConfig::adaptive_with_display(ThinkingDisplay::Other)
+        );
+    }
+
+    #[test]
+    fn between_tools_round_trips() {
+        let c = ThinkingConfig::BetweenTools;
+        let v = serde_json::to_value(c).unwrap();
+        assert_eq!(v, json!({"type": "between_tools"}));
         let parsed: ThinkingConfig = serde_json::from_value(v).unwrap();
         assert_eq!(parsed, c);
     }

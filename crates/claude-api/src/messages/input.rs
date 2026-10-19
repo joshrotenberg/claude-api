@@ -33,10 +33,21 @@ impl MessageInput {
         }
     }
 
-    /// An assistant-authored turn (used to seed prefill).
+    /// An assistant-authored turn: a previous response's content when
+    /// replaying history, or a prefill on models that still accept one.
     pub fn assistant(content: impl Into<MessageContent>) -> Self {
         Self {
             role: Role::Assistant,
+            content: content.into(),
+        }
+    }
+
+    /// A mid-conversation operator instruction (`"role": "system"` inside
+    /// `messages`). See [`Role::System`] for placement rules and model
+    /// support.
+    pub fn system(content: impl Into<MessageContent>) -> Self {
+        Self {
+            role: Role::System,
             content: content.into(),
         }
     }
@@ -159,6 +170,51 @@ mod tests {
         assert_eq!(
             serde_json::to_value(&s).unwrap(),
             json!([{"type": "text", "text": "be concise"}])
+        );
+    }
+
+    #[test]
+    fn response_content_replays_as_assistant_turn_without_loss() {
+        // A stored conversation keeps each response's content and sends it
+        // back as the next request's assistant turn. Every block, including
+        // ones this SDK does not model, must survive the trip through
+        // storage unchanged: thinking signatures and unknown blocks are
+        // rejected or dropped by the API if altered.
+        let wire_content = json!([
+            {"type": "thinking", "thinking": "", "signature": "sig-abc"},
+            {"type": "text", "text": "Checking the weather."},
+            {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}},
+            {"type": "fallback", "from": {"model": "claude-opus-5-5"}, "to": {"model": "claude-opus-5"}},
+            {"type": "compaction", "content": "summary of earlier turns"}
+        ]);
+        let response: crate::messages::response::Message = serde_json::from_value(json!({
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": wire_content,
+            "stop_reason": "tool_use",
+            "usage": {"input_tokens": 10, "output_tokens": 20}
+        }))
+        .unwrap();
+
+        let turn = MessageInput::assistant(response.content);
+        let stored = serde_json::to_string(&turn).unwrap();
+        let restored: MessageInput = serde_json::from_str(&stored).unwrap();
+
+        assert_eq!(restored, turn);
+        assert_eq!(
+            serde_json::to_value(&restored).unwrap(),
+            json!({"role": "assistant", "content": wire_content})
+        );
+    }
+
+    #[test]
+    fn system_turn_serializes_with_system_role() {
+        let m = MessageInput::system("Answer in French from now on.");
+        assert_eq!(
+            serde_json::to_value(&m).unwrap(),
+            json!({"role": "system", "content": "Answer in French from now on."})
         );
     }
 }

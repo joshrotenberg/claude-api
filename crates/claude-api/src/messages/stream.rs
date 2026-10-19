@@ -905,7 +905,7 @@ impl Aggregator {
                     if let Some(ss) = delta.stop_sequence {
                         msg.stop_sequence = Some(ss);
                     }
-                    msg.usage = usage;
+                    msg.usage.merge_delta(usage);
                 }
             }
             KnownStreamEvent::MessageStop => {

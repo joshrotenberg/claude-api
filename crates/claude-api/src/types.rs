@@ -92,11 +92,19 @@ impl<'de> Deserialize<'de> for ModelId {
 /// Conversation role for a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Role {
     /// A user-authored turn.
     User,
     /// A model-authored turn.
     Assistant,
+    /// An operator instruction inside `messages`, after the conversation
+    /// has started. Supported on Claude Opus 4.8, Opus 5.x, Sonnet 5.5,
+    /// Haiku 5.5 and Fable 5.x; it must follow a `user` turn and be either
+    /// the last message or followed by an `assistant` turn. Adding one
+    /// keeps the cached prefix, where editing the top-level `system`
+    /// prompt invalidates it.
+    System,
 }
 
 /// Why the model stopped producing output.
@@ -172,6 +180,60 @@ pub struct Usage {
     /// forward-compat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inference_geo: Option<String>,
+    /// Speed the request ran at (`"standard"` or `"fast"` for fast mode).
+    /// Open string for forward-compat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<String>,
+    /// Usage fields this SDK does not model yet (for example
+    /// `iterations` on server-side fallback), kept so a stored `Usage`
+    /// round-trips without loss.
+    #[serde(flatten, default, skip_serializing_if = "serde_json::Map::is_empty")]
+    pub extra: serde_json::Map<String, serde_json::Value>,
+}
+
+impl Usage {
+    /// Fold a streaming `message_delta` usage into the usage reported at
+    /// `message_start`. Token counts in the delta are cumulative and
+    /// replace the earlier values; optional fields the delta omits keep
+    /// their `message_start` values.
+    pub(crate) fn merge_delta(&mut self, delta: Usage) {
+        let Usage {
+            input_tokens,
+            output_tokens,
+            cache_creation_input_tokens,
+            cache_read_input_tokens,
+            cache_creation,
+            server_tool_use,
+            service_tier,
+            inference_geo,
+            speed,
+            extra,
+        } = delta;
+        self.input_tokens = input_tokens;
+        self.output_tokens = output_tokens;
+        if cache_creation_input_tokens.is_some() {
+            self.cache_creation_input_tokens = cache_creation_input_tokens;
+        }
+        if cache_read_input_tokens.is_some() {
+            self.cache_read_input_tokens = cache_read_input_tokens;
+        }
+        if cache_creation.is_some() {
+            self.cache_creation = cache_creation;
+        }
+        if server_tool_use.is_some() {
+            self.server_tool_use = server_tool_use;
+        }
+        if service_tier.is_some() {
+            self.service_tier = service_tier;
+        }
+        if inference_geo.is_some() {
+            self.inference_geo = inference_geo;
+        }
+        if speed.is_some() {
+            self.speed = speed;
+        }
+        self.extra.extend(extra);
+    }
 }
 
 /// Per-TTL breakdown of cache-creation tokens.
@@ -295,6 +357,8 @@ mod tests {
             }),
             service_tier: Some(ServiceTier::Standard),
             inference_geo: Some("us-east-1".into()),
+            speed: Some("fast".into()),
+            extra: serde_json::Map::new(),
         };
         let json = serde_json::to_string(&u).expect("serialize");
         let parsed: Usage = serde_json::from_str(&json).expect("deserialize");
@@ -311,5 +375,52 @@ mod tests {
         let parsed: Usage = serde_json::from_str(json).expect("deserialize");
         assert_eq!(parsed.input_tokens, 5);
         assert_eq!(parsed.output_tokens, 7);
+    }
+
+    #[test]
+    fn usage_keeps_unknown_fields_on_round_trip() {
+        let wire = serde_json::json!({
+            "input_tokens": 5,
+            "output_tokens": 7,
+            "speed": "standard",
+            "iterations": [{"type": "message", "input_tokens": 5, "output_tokens": 7}]
+        });
+        let parsed: Usage = serde_json::from_value(wire.clone()).expect("deserialize");
+        assert_eq!(parsed.speed.as_deref(), Some("standard"));
+        assert!(parsed.extra.contains_key("iterations"));
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), wire);
+    }
+
+    #[test]
+    fn merge_delta_keeps_fields_the_delta_omits() {
+        let mut start: Usage = serde_json::from_value(serde_json::json!({
+            "input_tokens": 120,
+            "output_tokens": 1,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 0, "ephemeral_1h_input_tokens": 100},
+            "service_tier": "standard",
+            "inference_geo": "us"
+        }))
+        .unwrap();
+        let delta: Usage = serde_json::from_value(serde_json::json!({
+            "input_tokens": 120,
+            "output_tokens": 42,
+            "cache_creation_input_tokens": 100,
+            "cache_read_input_tokens": 0
+        }))
+        .unwrap();
+        start.merge_delta(delta);
+        assert_eq!(start.output_tokens, 42);
+        assert_eq!(start.cache_creation.unwrap().ephemeral_1h_input_tokens, 100);
+        assert_eq!(start.service_tier, Some(ServiceTier::Standard));
+        assert_eq!(start.inference_geo.as_deref(), Some("us"));
+    }
+
+    #[test]
+    fn role_system_serializes_lowercase() {
+        assert_eq!(serde_json::to_string(&Role::System).unwrap(), r#""system""#);
+        let parsed: Role = serde_json::from_str(r#""system""#).unwrap();
+        assert_eq!(parsed, Role::System);
     }
 }
