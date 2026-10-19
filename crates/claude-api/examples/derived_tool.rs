@@ -27,7 +27,7 @@ struct GetWeather {
 }
 
 impl GetWeather {
-    #[allow(clippy::unused_async)]
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn run(self) -> Result<Value, ToolError> {
         Ok(json!({"temp_f": 72, "city": self.city, "summary": "clear"}))
     }

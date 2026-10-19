@@ -1198,7 +1198,7 @@ mod aggregator_tests {
         agg.handle(StreamEvent::Known(KnownStreamEvent::MessageStop))
             .unwrap();
         let msg = agg.finalize().unwrap();
-        assert!(msg.content.is_empty());
+        assert_eq!(msg.content.len(), 0);
     }
 
     #[test]

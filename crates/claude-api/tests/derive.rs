@@ -16,7 +16,7 @@ struct GetWeather {
 }
 
 impl GetWeather {
-    #[allow(clippy::unused_async)]
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn run(self) -> Result<serde_json::Value, ToolError> {
         Ok(json!({"temp": 72, "city": self.city}))
     }
@@ -33,7 +33,7 @@ struct LookupArgs {
 }
 
 impl LookupArgs {
-    #[allow(clippy::unused_async)]
+    #[allow(unknown_lints, clippy::unused_async, clippy::unused_async_trait_impl)]
     async fn run(self) -> Result<serde_json::Value, ToolError> {
         Ok(json!({"q": self.q, "matched": true}))
     }
