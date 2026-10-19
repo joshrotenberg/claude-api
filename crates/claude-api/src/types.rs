@@ -196,6 +196,7 @@ impl Usage {
     /// `message_start`. Token counts in the delta are cumulative and
     /// replace the earlier values; optional fields the delta omits keep
     /// their `message_start` values.
+    #[cfg_attr(not(feature = "streaming"), allow(dead_code))]
     pub(crate) fn merge_delta(&mut self, delta: Usage) {
         let Usage {
             input_tokens,
