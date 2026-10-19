@@ -24,6 +24,17 @@ struct ModelEntry {
     cache_creation_5m_per_mtok: Option<f64>,
     cache_creation_1h_per_mtok: Option<f64>,
     cache_read_per_mtok: Option<f64>,
+    long_context: Option<LongContextEntry>,
+}
+
+#[derive(serde::Deserialize)]
+struct LongContextEntry {
+    above_prompt_tokens: u32,
+    input_per_mtok: f64,
+    output_per_mtok: f64,
+    cache_creation_5m_per_mtok: Option<f64>,
+    cache_creation_1h_per_mtok: Option<f64>,
+    cache_read_per_mtok: Option<f64>,
 }
 
 fn main() {
@@ -40,7 +51,7 @@ fn main() {
     // FP arithmetic on cache multipliers can produce values like
     // 0.30000000000000004; clippy's unreadable_literal complains. Allow
     // it here -- the generated file is opaque to users.
-    out.push_str("#[allow(clippy::unreadable_literal)]\n");
+    out.push_str("#[allow(clippy::unreadable_literal, clippy::too_many_lines)]\n");
     out.push_str("pub(crate) fn bundled_rates() -> Vec<(crate::types::ModelId, crate::pricing::ModelPricing)> {\n");
     out.push_str("    vec![\n");
 
@@ -53,9 +64,26 @@ fn main() {
             .unwrap_or(m.input_per_mtok * 2.0);
         let cache_read = m.cache_read_per_mtok.unwrap_or(m.input_per_mtok * 0.1);
 
+        let long_context = match &m.long_context {
+            None => "None".to_owned(),
+            Some(t) => format!(
+                "Some(crate::pricing::LongContextTier {{\n                    above_prompt_tokens: {above},\n                    input_per_mtok: {input}_f64,\n                    output_per_mtok: {output}_f64,\n                    cache_creation_5m_per_mtok: {c5m}_f64,\n                    cache_creation_1h_per_mtok: {c1h}_f64,\n                    cache_read_per_mtok: {cr}_f64,\n                }})",
+                above = t.above_prompt_tokens,
+                input = t.input_per_mtok,
+                output = t.output_per_mtok,
+                c5m = t
+                    .cache_creation_5m_per_mtok
+                    .unwrap_or(t.input_per_mtok * 1.25),
+                c1h = t
+                    .cache_creation_1h_per_mtok
+                    .unwrap_or(t.input_per_mtok * 2.0),
+                cr = t.cache_read_per_mtok.unwrap_or(t.input_per_mtok * 0.1),
+            ),
+        };
+
         writeln!(
             out,
-            "        (\n            crate::types::ModelId::from(\"{id}\"),\n            crate::pricing::ModelPricing {{\n                input_per_mtok: {input}_f64,\n                output_per_mtok: {output}_f64,\n                cache_creation_5m_per_mtok: {c5m}_f64,\n                cache_creation_1h_per_mtok: {c1h}_f64,\n                cache_read_per_mtok: {cr}_f64,\n                web_search_per_request: {ws}_f64,\n            }},\n        ),",
+            "        (\n            crate::types::ModelId::from(\"{id}\"),\n            crate::pricing::ModelPricing {{\n                input_per_mtok: {input}_f64,\n                output_per_mtok: {output}_f64,\n                cache_creation_5m_per_mtok: {c5m}_f64,\n                cache_creation_1h_per_mtok: {c1h}_f64,\n                cache_read_per_mtok: {cr}_f64,\n                web_search_per_request: {ws}_f64,\n                long_context: {lc},\n            }},\n        ),",
             id = m.id,
             input = m.input_per_mtok,
             output = m.output_per_mtok,
@@ -63,6 +91,7 @@ fn main() {
             c1h = cache_long,
             cr = cache_read,
             ws = m.web_search_per_request,
+            lc = long_context,
         )
         .expect("write to String never fails");
     }
