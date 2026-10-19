@@ -178,7 +178,7 @@ async fn live_models_get_sonnet_4_6() {
             .expect("get model");
         assert_eq!(m.id.as_str(), "claude-sonnet-4-6");
         assert_eq!(m.kind, "model");
-        assert!(!m.display_name.is_empty());
+        assert_ne!(m.display_name, "");
 
         // Capability matrix should be present and decode into the
         // typed shape (no Value fallback).
