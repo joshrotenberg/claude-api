@@ -31,14 +31,29 @@ use serde::{Deserialize, Serialize};
 pub struct ModelId(Cow<'static, str>);
 
 impl ModelId {
-    /// Claude Fable 5, the most capable model (top tier above Opus).
+    /// Claude Fable 5.1, the most capable widely released model (top tier
+    /// above Opus).
+    pub const FABLE_5_1: ModelId = ModelId(Cow::Borrowed("claude-fable-5-1"));
+    /// Claude Fable 5, the previous Fable release.
     pub const FABLE_5: ModelId = ModelId(Cow::Borrowed("claude-fable-5"));
+    /// Claude Opus 5.5, the current Opus.
+    pub const OPUS_5_5: ModelId = ModelId(Cow::Borrowed("claude-opus-5-5"));
+    /// Claude Opus 5.
+    pub const OPUS_5: ModelId = ModelId(Cow::Borrowed("claude-opus-5"));
     /// Claude Opus 4.8.
     pub const OPUS_4_8: ModelId = ModelId(Cow::Borrowed("claude-opus-4-8"));
     /// Claude Opus 4.7.
     pub const OPUS_4_7: ModelId = ModelId(Cow::Borrowed("claude-opus-4-7"));
+    /// Claude Opus 4.6.
+    pub const OPUS_4_6: ModelId = ModelId(Cow::Borrowed("claude-opus-4-6"));
+    /// Claude Sonnet 5.5, the current Sonnet.
+    pub const SONNET_5_5: ModelId = ModelId(Cow::Borrowed("claude-sonnet-5-5"));
+    /// Claude Sonnet 5.
+    pub const SONNET_5: ModelId = ModelId(Cow::Borrowed("claude-sonnet-5"));
     /// Claude Sonnet 4.6.
     pub const SONNET_4_6: ModelId = ModelId(Cow::Borrowed("claude-sonnet-4-6"));
+    /// Claude Haiku 5.5, the current Haiku.
+    pub const HAIKU_5_5: ModelId = ModelId(Cow::Borrowed("claude-haiku-5-5"));
     /// Claude Haiku 4.5 (dated snapshot).
     pub const HAIKU_4_5: ModelId = ModelId(Cow::Borrowed("claude-haiku-4-5-20251001"));
 
@@ -276,8 +291,15 @@ mod tests {
 
     #[test]
     fn model_id_serializes_as_string() {
+        round_trip(&ModelId::FABLE_5_1, "\"claude-fable-5-1\"");
         round_trip(&ModelId::FABLE_5, "\"claude-fable-5\"");
+        round_trip(&ModelId::OPUS_5_5, "\"claude-opus-5-5\"");
+        round_trip(&ModelId::OPUS_5, "\"claude-opus-5\"");
         round_trip(&ModelId::OPUS_4_8, "\"claude-opus-4-8\"");
+        round_trip(&ModelId::OPUS_4_6, "\"claude-opus-4-6\"");
+        round_trip(&ModelId::SONNET_5_5, "\"claude-sonnet-5-5\"");
+        round_trip(&ModelId::SONNET_5, "\"claude-sonnet-5\"");
+        round_trip(&ModelId::HAIKU_5_5, "\"claude-haiku-5-5\"");
         round_trip(&ModelId::OPUS_4_7, "\"claude-opus-4-7\"");
         round_trip(&ModelId::SONNET_4_6, "\"claude-sonnet-4-6\"");
         round_trip(&ModelId::HAIKU_4_5, "\"claude-haiku-4-5-20251001\"");

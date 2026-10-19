@@ -3,24 +3,115 @@
 # Updates: edit the relevant [[models]] entry. The `build.rs` script reads
 # this file and emits Rust source at compile time; no runtime parsing.
 #
-# Rates are USD per million tokens unless noted. Cache rates default to
-# the standard Anthropic multipliers (5m = 1.25x input, 1h = 2x input,
-# read = 0.1x input) when omitted -- override by setting the explicit
-# `cache_creation_5m_per_mtok` / `cache_creation_1h_per_mtok` /
-# `cache_read_per_mtok` fields. `web_search_per_request` is per-call USD.
+# Rates are USD per million tokens unless noted, first-party Claude API
+# list prices. Cache rates default to the standard Anthropic multipliers
+# (5m = 1.25x input, 1h = 2x input, read = 0.1x input) when omitted --
+# override by setting the explicit `cache_creation_5m_per_mtok` /
+# `cache_creation_1h_per_mtok` / `cache_read_per_mtok` fields.
+# `web_search_per_request` is per-call USD.
 #
-# Anthropic adjusts pricing periodically; PRs welcome.
+# A model whose rate depends on prompt size carries a `[models.long_context]`
+# table: when the prompt (input + cache write + cache read tokens) exceeds
+# `above_prompt_tokens`, the whole request is billed at that tier's rates.
+# Its cache rates follow the same defaults, derived from the tier's input
+# rate.
+#
+# Not modeled: fast mode, Batch API and Priority Tier pricing, and
+# partner-platform (Bedrock, Vertex) rates.
+#
+# Last checked: 2026-10-19.
+
+[[models]]
+id = "claude-fable-5-1"
+input_per_mtok = 10.00
+output_per_mtok = 50.00
+cache_read_per_mtok = 0.25
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-mythos-5-1"
+input_per_mtok = 10.00
+output_per_mtok = 50.00
+cache_read_per_mtok = 0.25
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-fable-5"
+input_per_mtok = 10.00
+output_per_mtok = 50.00
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-mythos-5"
+input_per_mtok = 10.00
+output_per_mtok = 50.00
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-opus-5-5"
+input_per_mtok = 4.00
+output_per_mtok = 20.00
+cache_read_per_mtok = 0.20
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-opus-5"
+input_per_mtok = 5.00
+output_per_mtok = 25.00
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-opus-4-8"
+input_per_mtok = 5.00
+output_per_mtok = 25.00
+web_search_per_request = 0.01
 
 [[models]]
 id = "claude-opus-4-7"
-input_per_mtok = 15.00
-output_per_mtok = 75.00
+input_per_mtok = 5.00
+output_per_mtok = 25.00
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-opus-4-6"
+input_per_mtok = 5.00
+output_per_mtok = 25.00
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-sonnet-5-5"
+input_per_mtok = 2.00
+output_per_mtok = 10.00
+cache_read_per_mtok = 0.20
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-sonnet-5"
+input_per_mtok = 2.00
+output_per_mtok = 10.00
 web_search_per_request = 0.01
 
 [[models]]
 id = "claude-sonnet-4-6"
 input_per_mtok = 3.00
 output_per_mtok = 15.00
+web_search_per_request = 0.01
+
+[[models]]
+id = "claude-haiku-5-5"
+input_per_mtok = 0.10
+output_per_mtok = 0.50
+web_search_per_request = 0.01
+
+[models.long_context]
+above_prompt_tokens = 100000
+input_per_mtok = 0.50
+output_per_mtok = 2.50
+
+[[models]]
+id = "claude-haiku-4-5"
+input_per_mtok = 1.00
+output_per_mtok = 5.00
 web_search_per_request = 0.01
 
 [[models]]

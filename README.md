@@ -35,7 +35,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .messages()
         .create(
             CreateMessageRequest::builder()
-                .model(ModelId::OPUS_4_8)
+                .model(ModelId::OPUS_5_5)
                 .max_tokens(256)
                 .system("Be concise.")
                 .user("What is the capital of France?")
