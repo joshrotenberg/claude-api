@@ -644,8 +644,8 @@ mod tests {
     #[test]
     fn new_starts_empty() {
         let c = convo();
-        assert!(c.messages.is_empty());
-        assert!(c.usage_history.is_empty());
+        assert_eq!(c.messages.len(), 0);
+        assert_eq!(c.usage_history.len(), 0);
         assert_eq!(c.turn_count(), 0);
     }
 

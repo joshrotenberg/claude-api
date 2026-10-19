@@ -241,7 +241,7 @@ mod tests {
             .unwrap();
         let first = stream.next().await.unwrap().unwrap();
         let second = stream.next().await.unwrap().unwrap();
-        assert!(first.type_tag().as_deref() == Some("agent.message"));
-        assert!(second.type_tag().as_deref() == Some("session.thread_idle"));
+        assert_eq!(first.type_tag().as_deref(), Some("agent.message"));
+        assert_eq!(second.type_tag().as_deref(), Some("session.thread_idle"));
     }
 }
